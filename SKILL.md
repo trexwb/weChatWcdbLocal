@@ -22,7 +22,8 @@ agent_created: true
 本技能在执行前需要用户知情同意。**宿主 agent（WorkBuddy / CodeBuddy / Qoder / Claude 等）应在弹窗中向用户展示下列清单**，用户点「同意」后才继续：
 
 - **读取本地微信数据目录**：`db_storage` 下的 `message_*.db / contact.db / session.db`（Windows 由 `%APPDATA%\Tencent\xwechat\config\*.ini` 定位，macOS 在 `~/Library/Containers/com.tencent.xinWeChat/...`）。
-- **读取微信进程内存**（可选，仅在用户显式要求自动取密钥时）：Windows 走 `--allow-memory-scan`（调 `Kernel32` 读进程内存）；macOS 走 `--mac-frida`（frida 附加微信进程拦截 `CCKeyDerivationPBKDF`）。
+- **读取微信进程内存**（可选，仅在用户显式要求自动取密钥时）：Windows 走 `--allow-memory-scan`（调 `Kernel32` 读进程内存）；macOS 走 `--mac-frida`（frida 附加微信进程拦截 `CCKeyDerivationPBKDF`，以当前用户身份运行，**不需要 sudo**）。
+- **创建微信重签名副本**（仅 macOS 自动取密钥时需要，不需要 sudo）：`bash scripts/resign-wechat.sh` 把 `/Applications/WeChat.app` **复制**成 `~/Applications/WeChat.app` 并 ad-hoc 重签名（加 `com.apple.security.get-task-allow`、保留 `com.apple.security.app-sandbox`）；**只写副本，对 `/Applications` 原版零写操作**，副本已存在则默认退出，重建用 `--force`（旧副本改名为带时间戳的备份，不会被删除）。
 - **本机执行 Node 命令**并**写出明文数据库与结果文件**：`plain/*.plain.db`、`messages.json`，以及报告文件 `report.html` / `report.md` / `report.json`（按所选格式生成）。
 - **不联网、不上传**：全程本机离线处理，任何数据不发送到外部。
 - **敏感提示**：产物中包含明文聊天记录与数据库密钥（`keys.json` / passphrase），使用完毕后应删除。
@@ -40,8 +41,9 @@ node bin/wcdb.js pipeline --username wxid_目标 --self-wxid wxid_本人 --key <
 # Windows：从内存 dump 取密钥
 node bin/wcdb.js pipeline --username wxid_目标 --dump wcdb_blob.bin
 
-# macOS：frida 抓取（需重签名微信 + root，在启动瞬间抓）
-sudo node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
+# macOS：frida 抓取（重签名副本 + 同用户非 root 直跑，不需要 sudo，在启动瞬间抓）
+# 前置一次性步骤见「2. 获取密钥」的 macOS 前置（bash scripts/resign-wechat.sh）
+node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
 ```
 
 输出：`messages.json`（结构化消息）与报告文件（默认 `report.html`，加 `-f html,md,json` 可同时得到 `report.md` / `report.json`；各文件路径会在结束时打印）。
@@ -88,7 +90,21 @@ npm install sqlcipher
 - 已知密钥：直接用 `--key <hex>`。
 - Windows 内存 dump（最稳妥，跨平台）：`node bin/wcdb.js key --dump wcdb_blob.bin -o keys.json`
 - Windows 实时扫描（实验性，需 `--allow-memory-scan`）：`node bin/wcdb.js key --allow-memory-scan -o keys.json`
-- macOS frida（需重签名微信 + root）：`sudo node bin/wcdb.js key --mac-frida -o keys.json`
+- macOS frida（**不需要 sudo**）：`node bin/wcdb.js key --mac-frida -o keys.json`
+
+**macOS 前置（一次性，全程不需要 sudo）**：frida attach 微信进程只要求两条——「目标进程属主 == 当前用户」+「目标带 `com.apple.security.get-task-allow`」。App Store 原版本在 Hardened Runtime + SIP 下必然没有后者，所以先做一份重签名副本：
+
+```bash
+bash scripts/resign-wechat.sh
+# 把 /Applications/WeChat.app 复制成 ~/Applications/WeChat.app 并 ad-hoc 重签名
+# 加 com.apple.security.get-task-allow、保留 com.apple.security.app-sandbox（sandbox 不能删，否则微信会切到另一个数据目录，读不到已有记录）
+# 只写副本，对 /Applications 原版零写操作；副本已存在则默认退出，重建用 --force（旧副本改名为带时间戳的备份，不会被删除）
+```
+
+然后**完全退出原版微信，从 `~/Applications/WeChat.app` 启动并登录**；抓取时先运行上面的 `key --mac-frida`，再在 90 秒内启动微信（必须在启动瞬间 attach）。
+
+- **首次**以非 root 身份 attach 被拒时：打开「系统设置 → 隐私与安全性 → 开发者工具」，把当前终端（或 Node）加入并打开开关后重跑，这一步同样不需要 sudo。
+- **只有跨用户才需要提权**：微信跑在另一个用户账号下（目标进程属主 ≠ 当前用户）时，才用 `sudo node bin/wcdb.js key --mac-frida`，或直接切到那个账号运行；对没走重签名副本的 App Store 原版进程，sudo 也解不开。
 
 ### 3. 解密数据库
 
@@ -131,7 +147,7 @@ npm test
 - **平台探测**：`detectPlatform()` 用 `process.platform` 区分 `win32` / `darwin` / 其他，数据目录定位各自独立实现（`resolveWindowsDataDir` 读 `%APPDATA%`+`.ini`，`resolveMacDataDir` 扫 `~/Library/Containers/com.tencent.xinWeChat/...`）。
 - **平台代码隔离**：Windows 实时内存扫描（`Kernel32.dll` + koffi）与 macOS frida 抓取互相隔离，未命中对应平台时给出明确指引而非崩溃；`koffi` / `frida` 均为**惰性 `require`**，不会在另一平台加载期报错。
 - **路径跨平台**：临时文件统一用 `os.tmpdir()` + `path.join` 构造（如 passphrase 落盘 `wxdb/passphrase.hex`），不写死 `/tmp`，Windows 上自动落到 `AppData\Local\Temp`。
-- **依赖双平台可用**：`@foxglove/wasm-zstd`（wasm 无原生）、`better-sqlite3`（有 win/mac 预编译）、`commander`（纯 JS）、`koffi`（有 win/mac 预编译）均可在两系统 `npm install`；`sqlcipher` 仅为 `optionalDependencies` 回退；`frida` 仅 macOS 按需 `npm install frida`。
+- **依赖双平台可用**：`@foxglove/wasm-zstd`（wasm 无原生）、`better-sqlite3`（有 win/mac 预编译）、`commander`（纯 JS）、`koffi`（有 win/mac 预编译）均可在两系统 `npm install`；`sqlcipher` 仅为 `optionalDependencies` 回退；`frida` 仅 macOS 按需 `npm install frida`（普通用户权限安装即可，无需 sudo）。
 - **CLI 跨平台**：`bin/wcdb.js` 用 `#!/usr/bin/env node`，Windows 下 npm 自动生成 `.cmd` 包装，`wcdb` 命令可用。
 
 ## 跨 agent 兼容性
@@ -155,4 +171,5 @@ npm test
 - **macOS 无 `Config.Cipher`**：Mac 版微信只有 frida 路径，详见 `references/wcdb-crypto.md`。
 - **未真机验证项**：纯 JS 对真实微信 4.x `.db` 解密、Windows 实时内存扫描、macOS frida 抓取均依赖真实环境，需在真机确认。
 - **local_type 取低 32 位**；群消息发送者由 `wxid_xxx:\n` 前缀反推；`real_sender_id` 每个 `message_N.db` 独立，库内无映射表。
-- **重签名保留 sandbox**：删掉 `com.apple.security.app-sandbox` 会让微信切到另一数据目录，读不到已有记录。
+- **重签名保留 sandbox**：删掉 `com.apple.security.app-sandbox` 会让微信切到另一数据目录，读不到已有记录（`scripts/resign-wechat.sh` 已处理这一点）。
+- **attach 与 sudo 无关**：属主与当前用户一致 + 目标带 `get-task-allow` 时，frida / lldb attach 不需要 root，`sudo` 只在目标进程属主是另一个用户时才是必要的；对未重签名的 App Store 原版进程，sudo 也解不开。

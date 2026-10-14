@@ -50,6 +50,8 @@ wechat-wcdb-node/
 │       ├── json.js        # JSON 模板（带 meta 与昵称，供其它应用解析）
 │       └── index.js       # 注册表 + 格式推断 + 扩展名改写
 ├── test/selftest.js       # 纯 JS 部分自测（zstd / 派生 / 提取 / 报告模板）
+├── scripts/
+│   └── resign-wechat.sh   # macOS：复制并重签名微信到 ~/Applications（无需 sudo，只动副本）
 └── package.json
 ```
 
@@ -68,6 +70,7 @@ npm install                 # 装 wasm-zstd / better-sqlite3 / commander / koffi
 
 ```bash
 npm install frida          # 仅 macOS 用 frida 抓 passphrase 时需要
+bash scripts/resign-wechat.sh   # 另需一份重签名副本（不需要 sudo，只写 ~/Applications 下的副本）
 ```
 
 ## 快速开始
@@ -98,25 +101,44 @@ node bin/wcdb.js key --dump wcdb_blob.bin -o keys.json
 node bin/wcdb.js decrypt --dir D:\xwechat_files\<wxid>\db_storage --keys keys.json --out plain/
 ```
 
-### macOS：frida 抓 passphrase
+### macOS：frida 抓 passphrase（不需要 sudo）
+
+macOS 下 frida 要 attach 微信进程，只需两个条件，**都不需要 root**：
+
+1. **目标进程属主 == 当前用户**（微信在你自己账号下运行，天然满足）；
+2. **目标进程带 `com.apple.security.get-task-allow` 授权**（App Store 原版微信必然没有，所以要用重签名副本）。
 
 前置（需本人操作，触碰系统安全边界）：
 
-1. 复制并重签名微信到 `~/Applications/WeChat.app`，**保留 `com.apple.security.app-sandbox`**（否则微信切换数据目录）：
+1. 生成重签名副本（**只操作 `~/Applications/WeChat.app` 副本，`/Applications` 原版不动**），**保留 `com.apple.security.app-sandbox`**（否则微信切换数据目录）。仓库内脚本已把整套流程自动化：
+   ```bash
+   bash scripts/resign-wechat.sh          # 全程不需要 sudo
+   # 副本已存在时默认退出；要重建加 --force（旧副本先改名为带时间戳的备份，不会被删除）
+   ```
+   手工等价步骤（脚本失败时排查用）：
    ```bash
    cp -R /Applications/WeChat.app ~/Applications/
    codesign -d --entitlements :- /Applications/WeChat.app > ~/wx_ent_orig.plist
-   # 用脚本生成带 get-task-allow 的新授权（删 application-identifier / team-identifier，保留 sandbox）
+   # 编辑该 plist：新增 com.apple.security.get-task-allow=true，
+   # 删除 application-identifier 与 team-identifier，务必保留 com.apple.security.app-sandbox
    codesign --force --deep --sign - --entitlements ~/wx_ent.plist ~/Applications/WeChat.app
+   codesign -dv --entitlements :- ~/Applications/WeChat.app   # 校验：get-task-allow 在、sandbox 仍在
    ```
 2. 本机已 `npm install frida`。
-3. **用 root 运行本命令，并在 90 秒内从 `~/Applications/WeChat.app` 启动微信**：
+3. **以普通用户直接运行（不要 sudo）**，并在 90 秒内从 `~/Applications/WeChat.app` 启动微信：
    ```bash
-   sudo node bin/wcdb.js key --mac-frida -o keys.json
-   # 抓到的 passphrase 同时写入 /tmp/wxdb/passphrase.hex
+   node bin/wcdb.js key --mac-frida -o keys.json
+   # 抓到的 passphrase 同时写入 $TMPDIR/wxdb/passphrase.hex
    node bin/wcdb.js decrypt --keys keys.json --out plain/
    ```
-   > 注意：必须在微信「启动瞬间」attach，否则它启动后不再调用 PBKDF2；抓到后脚本会自动 `session.detach()`，避免微信变僵尸进程。
+   > - 必须在微信「启动瞬间」attach，否则它启动后不再调用 PBKDF2；抓到后脚本会自动 `session.detach()`，避免微信变僵尸进程。
+   > - 完全退出原版微信再从副本启动：命中 `/Applications` 下的原版进程时无法 attach。
+   > - **首次**以非 root 身份 attach 时，macOS 可能要求授权：到「系统设置 → 隐私与安全性 → 开发者工具」把当前终端（或 Node）加入并打开开关，然后重跑本命令即可——这一步同样不需要 sudo。
+
+**什么时候才需要 sudo（兜底，不是主路径）**：
+
+- 微信跑在**另一个用户账号**下（目标进程属主 ≠ 当前用户）：跨用户 attach 必须提权 `sudo node bin/wcdb.js key --mac-frida`，或干脆切到那个账号下运行。
+- 没走重签名副本、直接拿 App Store 原版进程硬试仍被拒时：sudo 也解不开（SIP + Hardened Runtime + 缺 `get-task-allow`），根治办法仍是回到第 1 步生成重签名副本。
 
 ## 关键陷阱（移植自两个上游 Skill）
 
@@ -127,7 +149,8 @@ node bin/wcdb.js decrypt --dir D:\xwechat_files\<wxid>\db_storage --keys keys.js
 | `real_sender_id` 反推 | 每个 `message_N.db` 独立本地索引，库内无映射表；用「`wxid_xxx:\n` 前缀」全表扫描实证构建 `{local_id → wxid}`；无前缀且无映射 = 本人 |
 | Mac 无 `Config.Cipher` | `com.Tencent.WCDB.Config.Cipher` 在 Mac 版不存在，只有 `Tokenize / ScalarFunction`，故 Mac 必须用 frida |
 | salt 附近搜密钥行不通 | 密钥不在 salt ±4KB 内，别在内存里搜 salt 定位密钥 |
-| 重签名保留 sandbox | 删掉 `com.apple.security.app-sandbox` 会让微信切到另一数据目录，读不到已有记录 |
+| 重签名保留 sandbox | 删掉 `com.apple.security.app-sandbox` 会让微信切到另一数据目录，读不到已有记录（`scripts/resign-wechat.sh` 已处理） |
+| attach 与 sudo 无关 | 属主与当前用户一致 + 目标带 `get-task-allow` 时，frida / lldb attach 不需要 root；`sudo` 只在目标属主是另一个用户时才是必要的 |
 | 表名 bytes 问题 | `Msg_<md5(username)>`；本工具用 better-sqlite3 直读，天然处理字符串列 |
 
 ## 验证状态（诚实说明）
@@ -143,13 +166,13 @@ node bin/wcdb.js decrypt --dir D:\xwechat_files\<wxid>\db_storage --keys keys.js
 **未经真机验证（本环境无微信安装）**，需你在真实设备上确认：
 - 纯 JS 解码对真实微信 4.x `.db` 的解密（参数按实测 SQLCipher4 设定；如个别版本异常可切 `--backend sqlcipher`）
 - Windows 实时内存扫描（koffi 调用 `OpenProcess/ReadProcessMemory/VirtualQueryEx`）
-- macOS frida 抓取 passphrase（依赖重签名微信 + root + 启动时机）
+- macOS frida 抓取 passphrase（依赖重签名副本 + 同用户非 root + 启动时机）
 
 ## 已知限制
 
 - 仅支持微信桌面版 4.x；微信版本升级可能改变 `Config.Cipher` 或相关函数符号。
 - 媒体原文件（图片/视频/语音的 `.dat`）仍是密文，不在本工具范围。
-- Windows 实时扫描与 macOS frida 均触碰系统安全机制，需相应权限。
+- Windows 实时扫描与 macOS frida 均触碰系统安全机制；macOS 走「重签名副本 + 同用户」路径时不需要 sudo，仅微信跑在其他用户账号下才需提权。
 
 ## 作为各 agent 的技能安装（GitHub）
 
@@ -198,8 +221,8 @@ node bin/wcdb.js pipeline --username wxid_目标 --self-wxid wxid_本人 --key <
 # Windows：内存 dump 取密钥
 node bin/wcdb.js pipeline --username wxid_目标 --dump wcdb_blob.bin
 
-# macOS：frida 抓取（需重签名微信 + root）
-sudo node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
+# macOS：frida 抓取（重签名副本 + 同用户非 root 直跑，不需要 sudo；副本用 scripts/resign-wechat.sh 生成）
+node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
 ```
 
 产出 `messages.json`，报告默认 `report.html`；加 `-f html,md,json` 即可一次拿到 Markdown / JSON，运行结束会打印每个文件的路径。密钥来源缺失或平台不匹配时，会抛出含可执行提示的异常（agent 应原样回传用户）。

@@ -20,11 +20,11 @@
 - **密钥获取四条通道**（`src/keyExtract.js`、`src/macKeyFrida.js`）：`--key` 手动传入、`--dump` 内存 dump 文件解析（跨平台）、`--allow-memory-scan` Windows 实时内存扫描（koffi 调 Kernel32，实验性、需显式开启）、`--mac-frida` macOS 启动瞬间拦截 `CCKeyDerivationPBKDF`。
 - **数据目录自动定位**（`src/platform.js`）：Windows 读 `%APPDATA%\Tencent\xwechat\config\*.ini` 首行并回退默认路径；macOS 通配扫描沙盒版本目录。权限类失败（EPERM/EACCES）转为「开启完全磁盘访问权限」的可操作提示。
 - **消息提取**（`src/extract.js`）：zstd 内容解压（wasm，指数扩容自适应目标容量）、`local_type` 低 32 位掩码、跨版本列名兼容映射、以 `wxid_xxx:\n` 前缀全表实证反推 `real_sender_id → wxid` 并判定「本人」。
-- **HTML 报告**（`src/report.js`）：自包含单文件，全字段转义。
+- **报告**（`src/report.js` + `src/templates/`）：自包含单文件，全字段转义；**支持 html / md / json 三种格式**，`-f, --format <list>` 可一次产出多种（同一基准路径按格式改写扩展名），默认由 `--out` 扩展名推断、兜底 html；`--template <file.js>` 可载入自定义模板模块（导出 `(data, ctx) => string` 或 `{ render }`），无需改仓库代码即可扩展 csv / txt / 下游 JSON 方言。`report` 与 `pipeline` 两个子命令均支持。
 - **一键流水线**（`src/pipeline.js`）：`pipeline` 命令串起「取密钥 → 解密 → 提取 → 报告」；`resolveKeySource` 为无 I/O 纯函数并带平台互斥门禁（非 macOS 拒绝 `--mac-frida`、非 Windows 拒绝 `--allow-memory-scan`）。
 - **CLI 五个子命令**：`key` / `decrypt` / `extract` / `report` / `pipeline`（`bin/wcdb.js`，commander）。
 - **库方式入口**：`src/index.js` 汇总公共 API，加载期隔离平台原生依赖。
-- **自测套件**：`test/selftest.js`，26 条断言，`npm test` 全绿。
+- **自测套件**：`test/selftest.js`，41 条断言（算法层 + 提取语义 + 平台门禁 + 报告多格式与同时产出），`npm test` 全绿。
 - **Agent 技能封装**：根目录 `SKILL.md` 遵循 Agent Skills 标准，可从 GitHub 安装到 WorkBuddy / CodeBuddy / Qoder / Claude；含权限与风险声明，由宿主弹窗确认后再执行。
 
 ### Changed
