@@ -4,7 +4,8 @@
 - 审查范围：`bin/wcdb.js`、`src/*.js`（11 个）、`test/selftest.js`，约 1900 行；并交叉核对 `README.md` / `SKILL.md` 的命令契约
 - 审查方式：逐文件静态审查 + 关键结论本地实测（实测数据见文末「附录 A：验证证据」）
 - 运行环境：Node.js v24.21.0 / darwin arm64
-- 基线：`node test/selftest.js` → **26 通过 / 0 失败**（自测本身质量良好，本报告不影响该结论）
+- 基线：`node test/selftest.js` → 报告初稿时为 **26 通过 / 0 失败**；复核时（提交 `3ec089a` 引入报告多格式模板后）为 **41 通过 / 0 失败**
+- **复核说明（重要）**：初稿审查的是 `0872a29` 树。其间该分支被并行提交 `3ec089a`（`feat: 报告输出支持 html/md/json 多格式与自定义模板（v1.0.0）`，改写了 `bin/wcdb.js` 的 action 结构、`src/report.js`、`src/pipeline.js`、`src/index.js`、`test/selftest.js`、`README.md`、`SKILL.md`）。本次已按新树逐条复核：**C-1/C-2/C-3、M-1…M-6、m-1…m-10 的结论全部仍然成立**（`src/keyExtract.js`、`src/decrypt.js`、`src/wcdbDecode.js` 未被该提交触及），仅 `bin/wcdb.js` 的行号发生位移，下文已按新行号更新。
 
 > 说明：本项目是 Node.js CLI，不是 Java/Vue，因此按等价的审查维度执行——空值/异常路径、并发与资源释放、SQL 与数据层、安全（密钥与隐私数据处置）、性能与内存、编码规范。
 
@@ -71,9 +72,9 @@
 
 #### [Critical] C-2 passphrase / 密钥候选以世界可读权限落盘，且默认写入共享临时目录
 
-- **位置**: `src/macKeyFrida.js:11`（`path.join(os.tmpdir(), 'wxdb', 'passphrase.hex')`）、`src/macKeyFrida.js:137-138`；`bin/wcdb.js:44`、`bin/wcdb.js:55`（`keys.json`）
+- **位置**: `src/macKeyFrida.js:11`（`path.join(os.tmpdir(), 'wxdb', 'passphrase.hex')`）、`src/macKeyFrida.js:233-234`；`bin/wcdb.js:57`、`bin/wcdb.js:68`（`keys.json`）
 - **问题**: `fs.writeFileSync(out, captured, 'utf8')` 未指定 `mode` → 默认 0644；`fs.mkdirSync(..., { recursive: true })` 默认 0777&~umask（在 `/tmp` 下得到 0755，目录本身可读）。
-- **暴露范围（已实测修正，勿照搬「/tmp 世界可读」的想当然）**: 本机实测普通终端下 `os.tmpdir()` 返回**私有 per-user 目录** `$TMPDIR`（`/var/folders/…/T`，属主自身、通常不可被他人读），此时风险主要是「0644 + 路径可预测」。但**文档主推的调用方式是 `sudo`**（`README.md:107`、`SKILL.md:88`、`README.md:194` 的 pipeline 同样带 sudo），macOS 默认 `env_reset` 会清掉 `TMPDIR` → `os.tmpdir()` 回落到 `/tmp`，路径即 `README.md:108` 自己写明的 `/tmp/wxdb/passphrase.hex`：`/tmp` 世界可读写、新目录 0755、文件 0644 → **同机任意本地用户可读**。
+- **暴露范围（已实测修正，勿照搬「/tmp 世界可读」的想当然）**: 本机实测普通终端下 `os.tmpdir()` 返回**私有 per-user 目录** `$TMPDIR`（`/var/folders/…/T`，属主自身、通常不可被他人读），此时风险主要是「0644 + 路径可预测」。但**文档主推的调用方式是 `sudo`**（`README.md:115`、`SKILL.md:91`、`README.md:202` 的 pipeline 同样带 sudo），macOS 默认 `env_reset` 会清掉 `TMPDIR` → `os.tmpdir()` 回落到 `/tmp`，路径即 `README.md:116` 自己写明的 `/tmp/wxdb/passphrase.hex`：`/tmp` 世界可读写、新目录 0755、文件 0644 → **同机任意本地用户可读**。
   ⚠️ 该 sudo 分支我未能执行验证（需要密码），是基于 macOS sudoers 默认策略与 README 自述路径的推断；`keys.json` 的 0644 与「写入当前工作目录」两点为直接代码事实，不受此影响。
 - **风险**: 这 32 字节是**主密钥**——`enc_key = PBKDF2(passphrase, 各库 salt, 256000)` 可由它离线推出（`src/decrypt.js:63-66`），拿到它 = 拿到全部微信库的解密能力。此外 `keys.json` 落在工作目录，易被终端日志、Time Machine、云同步目录（iCloud/Dropbox）、误提交带走。
 - **修复**:
@@ -89,23 +90,23 @@
   fs.writeFileSync(out, captured, { encoding: 'utf8', mode: 0o600 });
   try { fs.chmodSync(out, 0o600); } catch (e) { /* Windows 下忽略 */ }
   ```
-  `bin/wcdb.js:44` 与 `:55` 写 `keys.json` 处同样加 `{ mode: 0o600 }`。
+  `bin/wcdb.js:57` 与 `:68` 写 `keys.json` 处同样加 `{ mode: 0o600 }`。
   附：`.gitignore` 已忽略 `keys.json` / `plain/` / `messages.json` / `report.html`，这一点做得对，予以肯定；缺的是文件权限维度。
 
-- **另需注意**: `src/macKeyFrida.js:134` 在 passphrase 格式异常时把原文拼进错误信息（`'...：' + captured`），异常会经 `bin/wcdb.js:178` 打到 stderr → 密钥进日志。建议只输出长度与前 8 位。
+- **另需注意**: `src/macKeyFrida.js:230` 在 passphrase 格式异常时把原文拼进错误信息（`'...：' + captured`），异常会经 `bin/wcdb.js:247` 打到 stderr → 密钥进日志。建议只输出长度与前 8 位。
 
 #### [Critical] C-3 `decrypt` 子命令的浮空 Promise 绕过了统一错误处理（已实测复现）
 
-- **位置**: `bin/wcdb.js:73-81`，具体 `bin/wcdb.js:80`
-- **问题**: action 是同步函数，内部调用 `async` 的 `decryptSelective` 却既不 `return` 也不 `await`；`bin/wcdb.js:176-180` 的 `parseAsync(...).catch(...)` 收不到它。
+- **位置**: `bin/wcdb.js:86-94`，具体 `bin/wcdb.js:93`（复核后行号，提交 `3ec089a` 重排了 action 结构）
+- **问题**: action 是同步函数，内部调用 `async` 的 `decryptSelective` 却既不 `return` 也不 `await`；`bin/wcdb.js:244-249` 的 `main().catch(...)` → 「错误：… + exit 1」收不到它。
 - **实测**: 用同构的 commander 最小复现（同样的「同步 action 内浮空调用 async」写法）验证：
   - `parseAsync` 的 `.catch` **没有**捕获到异步内部的异常，约定的 `错误：<message>` + `exit 1` 输出没有发生；
   - 实际行为是 Node 抛出 unhandled rejection，打印**裸栈**并以退出码 1 结束；
   - 且 `parseAsync` 在真实工作完成前就已 resolve（复现中 `[ok] work finished` 出现在 handler 返回之后）。
-- **风险**: `decrypt` 是 `README.md:73/90/109`、`SKILL.md:93/95` 列出的 agent 主调用路径。后果有两类：① 失败时 agent 拿到的是堆栈而不是「怎么办」的提示，无法自我纠错（项目其它地方专门为此把 EPERM 转成了可操作提示，见 `src/platform.js:72-77`，说明这本是设计目标）；② 成功路径上「命令已返回」与「明文文件已写完」不再同步，调用方若紧接着 `extract`/采集结果，存在读到半成品或空目录的竞态。
+- **风险**: `decrypt` 是 `README.md:79/98/117`、`SKILL.md:96/98` 列出的 agent 主调用路径。后果有两类：① 失败时 agent 拿到的是堆栈而不是「怎么办」的提示，无法自我纠错（项目其它地方专门为此把 EPERM 转成了可操作提示，见 `src/platform.js:72-77`，说明这本是设计目标）；② 成功路径上「命令已返回」与「明文文件已写完」不再同步，调用方若紧接着 `extract`/采集结果，存在读到半成品或空目录的竞态。
 - **修复**:
   ```js
-  // 修复前 (bin/wcdb.js:73,80)
+  // 修复前 (bin/wcdb.js:86,93)
   .action((opts) => {
     ...
     decryptSelective(dir, candidates, opts.out, opts.files);
@@ -164,17 +165,17 @@
 
 #### [Major] M-5 候选密钥原文打印到 stdout
 
-- **位置**: `bin/wcdb.js:58-61`：`console.log('首个候选（供快速试解密）：', cands[0])`
+- **位置**: `bin/wcdb.js:71-74`：`console.log('首个候选（供快速试解密）：', cands[0])`
 - **问题**: 密钥明文进入标准输出。对 agent 驱动的工具，stdout 会被会话上下文、终端录像、CI 日志、`tee` 归档持久化——等同密钥外泄面。与 C-2 同源风险。
 - **修复**: 只输出指纹：`` console.log(`首个候选指纹：${cands[0].slice(0, 8)}…（完整值见 ${opts.out}，请视为机密文件）`)``
 
 #### [Major] M-6 frida 抓取成功后的 90 秒定时器未清理，且 resolve/reject 混用
 
-- **位置**: `src/macKeyFrida.js:99-130`，定时器 `src/macKeyFrida.js:120`；`done` 只 resolve（`:101`、`:107-112`）
+- **位置**: `src/macKeyFrida.js:196-226`（attach 之后的 promise 竞态与 detach 收口），定时器 `src/macKeyFrida.js:216`；`done` 只 resolve（`:197`、消息处理 `:199-210`）
 - **问题**:
   1. `new Promise((_, rej) => setTimeout(() => rej(...), timeoutMs))` 的定时器既不 `clearTimeout` 也不 `unref` → 即使 1 秒就抓到 passphrase，进程仍会存活到 90 秒定时器到期。CLI 表现为「结果已打印但命令不返回」，agent 侧容易误判为超时而重复触发（对微信启动时机的 hook 尤其敏感）。
-  2. `doneResolve(new Error(...))` 用 resolve 传错误，再靠 `if (r instanceof Error) throw r`（`:122`）区分——若脚本先 send `error`、随后仍 send 到 passphrase，`captured` 被赋值但 Promise 已定，行为取决于消息到达顺序，难排查。
-  3. `script.unload()` 未调用（只 `session.detach()`，`:126`）。
+  2. `doneResolve(new Error(...))` 用 resolve 传错误，再靠 `if (r instanceof Error) throw r`（`:218`）区分——若脚本先 send `error`、随后仍 send 到 passphrase，`captured` 被赋值但 Promise 已定，行为取决于消息到达顺序，难排查。
+  3. `script.unload()` 未调用（只 `session.detach()`，`:222`）。
 - **修复**:
   ```js
   let timer;
@@ -196,25 +197,25 @@
 
 | # | 位置 | 问题 | 建议 |
 |---|------|------|------|
-| m-1 | `bin/wcdb.js:93-95` | `extract` action 里 `db.close()` 不在 `finally`：`extractChat` 抛错（表不存在、列缺失，见 `src/extract.js:101,105`）时句柄泄漏 | 与 `src/pipeline.js:129-135` 对齐，改 `try/finally`（该处写法是正确的） |
+| m-1 | `bin/wcdb.js:106-108` | `extract` action 里 `db.close()` 不在 `finally`：`extractChat` 抛错（表不存在、列缺失，见 `src/extract.js:101,105`）时句柄泄漏 | 与 `src/pipeline.js:133-138` 对齐，改 `try/finally`（该处写法是正确的） |
 | m-2 | `bin/wcdb.js:5` | 引入 `path` 但全文件未使用（已 grep 确认） | 删除 |
 | m-3 | `src/extract.js:59`、`:63` | `find('real_sender_id','real_sender_id',…)` 与 `compress_content` 各重复一次，第二个永不生效；说明兼容列表其实没被认真校对 | 去重并补 `realSender` / `Message` 等真实变体 |
 | m-4 | `src/extract.js:130` | `(rawType >>> 0) & 0xffffffff` 后半段恒等冗余；若 `better-sqlite3` 启用 `safeIntegers` 返回 BigInt，`>>>` 直接抛 TypeError | `Number(rawType) >>> 0`，并去掉冗余掩码 |
 | m-5 | `src/extract.js:139` | `new Date(createTime * 1000)` 假定秒；某版本若为毫秒会得到荒谬年份且不报错 | 按位数判定：`createTime > 1e12 ? createTime : createTime * 1000` |
 | m-6 | `src/extract.js:152-169` | `loadContacts` 把「权限不足 / 路径错 / 表结构不符」全部静默成 `{}`（`:166-168`），且 `db.close()` 在 try 内、中途异常会泄漏 | `try/finally` + 首次失败 `console.warn` 一行原因；昵称映射缺失会让报告只有 wxid，用户需要知道为什么 |
 | m-7 | `src/zstd.js:13-29` | `_loading` 缓存了 rejected promise：一次瞬时失败后，本进程内所有后续 `decompress` 永久失败 | `.catch(e => { _loading = null; throw e; })` |
-| m-8 | `src/decrypt.js:180-183` + `bin/wcdb.js:72` | `--files` 未约束：`--files ../../x.db` 可越出 `--dir` 读取任意 `.db`（`path.join(dbDir, f)`） | `path.basename(f)` + 用 `target` 白名单正则再校验一次 |
+| m-8 | `src/decrypt.js:180-183` + `bin/wcdb.js:85`/`:174` | `--files` 未约束：`--files ../../x.db` 可越出 `--dir` 读取任意 `.db`（`path.join(dbDir, f)`） | `path.basename(f)` + 用 `target` 白名单正则再校验一次 |
 | m-9 | `src/platform.js:83` | `fs.statSync(verDir).isDirectory()` 未捕获异常，遇断链或权限拒绝会裸崩；同文件 `:66-79` 已认真处理 `readdirSync` 的 EPERM/EACCES，风格不一致 | 包 `try/catch`，与 `:72-77` 一样转成可操作提示或跳过 |
-| m-10 | `src/macKeyFrida.js:46`、`package.json` | `Module.findGlobalExportByName` 在 Frida 17 已移除（现为 `Module.findExportByName(null, name)`）；`frida` 未声明进 package.json（仅 `README.md:64` 手工说明），缺依赖时报错还会被 `:81` 说成「缺少 frida」 | 兼容写法 + 把 frida 加入 optionalDependencies，错误信息区分「未安装」与「API 不兼容」 |
+| m-10 | `src/macKeyFrida.js:129`、`package.json` | `Module.findGlobalExportByName` 在 Frida 17 已移除（现为 `Module.findExportByName(null, name)`）；`frida` 未声明进 package.json（仅 `README.md:70` 手工说明），缺依赖时报错还会被 `:164` 说成「缺少 frida」 | 兼容写法 + 把 frida 加入 optionalDependencies，错误信息区分「未安装」与「API 不兼容」 |
 
 ---
 
 ### Info / 值得保留的实践
 
 - **I-1** `src/wcdbDecode.js:59` 用 `crypto.timingSafeEqual` 比较 HMAC，并先校验长度——正确且不多余。
-- **I-2** `src/report.js` 对 content / sender / time / username / table **全部**走 `escapeHtml`（`src/report.js:5-13`、`:38-47`），HTML 注入面覆盖完整，没有遗漏字段。
-- **I-3** `src/pipeline.js:33-57` 的 `resolveKeySource` 是无 I/O 纯函数 + 显式平台互斥门禁，并被 `test/selftest.js:163-201` 完整覆盖；`src/platform.js:72-77` 把系统权限错误转成「去开完全磁盘访问权限」的可操作提示，还有对应断言（`test/selftest.js:205-227`）。这是本项目最值得保持的设计取向：**给 agent 的每条失败路径都要能自我解释**。
-- **I-4** 惰性 `require` 原生模块（`src/decrypt.js:24`、`src/keyExtract.js:120`、`src/macKeyFrida.js:79`）保证跨平台加载期安全；`src/decrypt.js:189-192` 用 `.probe.` 临时文件定位 passphrase 后清理，思路正确。
+- **I-2** HTML 模板（`src/templates/html.js:14-23`、`:56`）对 sender_name / create_time / content / chat.title / chat.table **全部**走 `escapeHtml`（工具函数在 `src/templates/helpers.js:12`，由 `src/report.js:10` 注入），HTML 注入面覆盖完整，没有遗漏字段。附带说明：`--template <file.js>` 会 `require` 用户提供的 JS 并以任意权限执行，这是「模板即本机代码」的既定设计，但 CLI 帮助与 README 应显式提示只加载自己编写/可信的模板文件。
+- **I-3** `src/pipeline.js:33-57` 的 `resolveKeySource` 是无 I/O 纯函数 + 显式平台互斥门禁，并被 `test/selftest.js:164-204` 完整覆盖；`src/platform.js:72-77` 把系统权限错误转成「去开完全磁盘访问权限」的可操作提示，还有对应断言（`test/selftest.js:206-231`）。这是本项目最值得保持的设计取向：**给 agent 的每条失败路径都要能自我解释**。
+- **I-4** 惰性 `require` 原生模块（`src/decrypt.js:24`、`src/keyExtract.js:120`、`src/macKeyFrida.js:162`）保证跨平台加载期安全；`src/decrypt.js:189-192` 用 `.probe.` 临时文件定位 passphrase 后清理，思路正确。
 - **I-5** `src/extract.js:46` 的二进制判别（替换字符 + 长度比）对 GBK/混合内容可能误判；工具已提取 `local_type`（`:129-130`）却没有用它来指导解码策略，建议以 `local_type` 为主、启发式为兜底。
 - **I-6** `src/decrypt.js:19` 的 `KDF_ITERS = [256000, 64000]`、`src/keyExtract.js:13-18` 的 `PBKDF2_VARIANTS` 是两处独立的版本参数，建议合并进 `src/constants.js` 与 `references/wcdb-crypto.md` 同源，避免版本适配时改漏。
 
@@ -222,7 +223,7 @@
 
 ## 测试覆盖缺口
 
-`test/selftest.js` 的 26 条断言集中在**算法层**（zstd 往返、md5 表名、XOR、页面加解密互逆、提取语义、平台门禁）。缺口恰是本次 Critical/Major 的落点：
+`test/selftest.js` 的 41 条断言（初稿时 26 条，提交 `3ec089a` 为报告多格式新增 15 条）集中在**算法层与渲染层**（zstd 往返、md5 表名、XOR、页面加解密互逆、提取语义、平台门禁、html/md/json 多格式产出）。缺口恰是本次 Critical/Major 的落点：
 
 1. **无 CLI 层测试**——C-3（浮空 Promise）只要有一条「跑 `node bin/wcdb.js decrypt` 并对不存在的密钥断言 stdout 以 `错误：` 开头、退出码为 1」的 smoke test 就会立刻暴露。
 2. **无候选规模/耗时上限断言**——C-1 可用「`collectCandidates` 处理 256KB 输入须在 X ms 内、候选数须 ≤ N」守住量级。
@@ -241,7 +242,7 @@
 2. **C-2 + C-3 + M-5**：密钥只以 0600 存于私有目录、不再原文打印；`decrypt` 的 `await` 补回，恢复 agent 依赖的「错误：可操作提示 + 退出码」契约。这三条改动量小（各约 5–15 行）、收益直接。
 3. **M-3 + M-6 + M-4**：修错误归因（别把「密钥不对」报成「缺原生模块」）、清理 frida 定时器、消息表单次遍历。
 
-若只想先动最小的一刀：改 `bin/wcdb.js:80`（加 `await`）与 `bin/wcdb.js:60`、`src/macKeyFrida.js:11/138`、`bin/wcdb.js:44/55`（权限与打印），10 行内即可消除两个 Critical 的实际暴露面。
+若只想先动最小的一刀：改 `bin/wcdb.js:93`（加 `await`）与 `bin/wcdb.js:73`、`src/macKeyFrida.js:11/233-234`、`bin/wcdb.js:57/68`（权限与打印），10 行内即可消除两个 Critical 的实际暴露面。
 
 ---
 
@@ -249,15 +250,46 @@
 
 | 结论 | 验证方式 | 结果 |
 |------|----------|------|
-| 基线自测 | `node test/selftest.js` | 26 通过 / 0 失败 |
+| 基线自测 | `node test/selftest.js` | 初稿 26 通过 / 0 失败；复核 41 通过 / 0 失败 |
 | 单偏移 PBKDF2 成本 | 本地实测各变体耗时（Node v24.21.0，darwin arm64） | sha1/64000=15.49ms、sha512/256000=52.67ms、sha512/64000=12.77ms、sha1/4000=0.82ms → **81.75 ms/偏移** |
 | C-1 量级 | 直接对 `collectCandidates` 跑 2KB 输入 | **超 2 分钟未完成**（被强制转后台），与外推一致 |
 | JS 解密吞吐 / 内存 | 合成 4MB、16MB WCDB 页做 `decryptBuffer` | 27ms / 101ms（**≈150 MB/s**），16MB 输入对应 **RSS 120MB** |
 | M-1 算法无需重写 | 同上 | 吞吐足够，瓶颈只在「整库驻留」 |
 | C-3 浮空 Promise | 用已安装的 commander 构造同构最小复现（同步 action 内浮空调用 async） | `.catch` 未捕获 → 打印裸栈、exit 1；handler 返回早于异步完成 |
 | sqlcipher 是否可用 | `ls node_modules`、`ls node_modules/sqlcipher` | **未安装**（仅 `@foxglove`、`better-sqlite3`、`commander`、`koffi`、`node-addon-api`） → M-3 成立 |
-| frida 是否声明 | grep `package.json` / `package-lock.json` | **未声明**，仅 `README.md:64` 要求手工 `npm install frida` → m-10 成立 |
+| frida 是否声明 | grep `package.json` / `package-lock.json` | **未声明**，仅 `README.md:70` 要求手工 `npm install frida` → m-10 成立（实测：主仓库 `node_modules` 无 frida，WorkBuddy 技能副本有） |
 | `path` 未使用 | grep `path\.` in `bin/wcdb.js` | 无匹配 → m-2 成立 |
-| `decrypt` 未 await | grep `await` in `bin/wcdb.js` | 仅 `:42`、`:94`、`:146` 三处有 await，`:80` 无 → C-3 定位确认 |
+| `decrypt` 未 await | grep `await` in `bin/wcdb.js`（复核后） | 已 `await` 的 action：`:55`（key）、`:107`（extract）、`:190`（pipeline）；**`:93`（decrypt）仍无** → C-3 复核后依然成立 |
 | M-2 拼接 SQL | ⚠️ **未运行时验证**（验证脚本被本地安全策略拦截） | 静态判断：`src/decrypt.js:117` 未转义 `'`，请自行复核 |
-| C-2 落盘位置与权限 | `node -e "console.log(require('os').tmpdir())"` + 静态代码 | 普通终端 `$TMPDIR` 为**私有 per-user 目录**（非 `/tmp`）；但文档主推 `sudo` 调用，sudo 重置 `TMPDIR` 后回落 `/tmp/wxdb/`（见 `README.md:108` 自述）。sudo 分支**未能实测**（需密码），`writeFileSync` 无 `mode` → 0644 为代码事实 |
+| C-2 落盘位置与权限 | `node -e "console.log(require('os').tmpdir())"` + 静态代码 | 普通终端 `$TMPDIR` 为**私有 per-user 目录**（非 `/tmp`）；但文档主推 `sudo` 调用，sudo 重置 `TMPDIR` 后回落 `/tmp/wxdb/`（见 `README.md:116` 自述）。sudo 分支**未能实测**（需密码），`writeFileSync` 无 `mode` → 0644 为代码事实 |
+| macOS frida 实跑失败 | 只读诊断：`ps`、`csrutil status`、`codesign -d --entitlements`、`ls` | 见下文「附录 B」 |
+
+---
+
+## 附录 B：v1.0.0 在真实 macOS 上首跑失败复盘（2026-10-14）
+
+用户按 `SKILL.md` 走 `--mac-frida`，报错：
+
+```
+等待微信进程出现（请在 90 秒内从 ~/Applications/WeChat.app 启动微信）...
+错误：Unable to access process with pid 1170 from the current user account
+```
+
+该文案是 frida 在 **attach 阶段**（挂 `CCKeyDerivationPBKDF` hook 之前）的原生错误，本仓库代码并未产生这条消息（WorkBuddy 侧包装层只是把它转述了一遍）。只读诊断结果：
+
+| 检查项 | 实测结果 | 结论 |
+|--------|----------|------|
+| `~/Applications/WeChat.app` | **不存在** | 重签名前置步骤从未完成 —— 这是首因 |
+| `/Applications/WeChat.app` 授权 | 有 `app-sandbox`、`application-identifier`、`team-identifier`、`allow-jit`；**没有 `com.apple.security.get-task-allow`** | 原版二进制在 SIP 下不可被 attach |
+| 签名 flags | `0x10000(runtime)` → hardened runtime | 同上，`task_for_pid` 会被 AMFI 拒绝 |
+| `csrutil status` | **enabled** | 不能靠提权绕过，必须重签名目标 app |
+| 运行身份 | 非 root（`getuid() != 0`） | 即便目标可调试也需要 sudo |
+| 微信进程实况 | 10 个进程的命令行都含 `WeChat.app/Contents/MacOS/WeChat` 前缀（主进程 + `WeChatAppEx` + `WeChatHelper` × 2 + `crashpad_handler` + 多个 Helper） | 见下方缺陷 B-2 |
+
+两个由此暴露的代码缺陷（**本次会话已在 `src/macKeyFrida.js` 修复，尚未提交**）：
+
+- **B-1 attach 失败无诊断**：原代码直接让 frida 的原生异常穿透，agent/用户拿到的是「Unable to access process …」这种不含下一步动作的信息，与项目在 `src/platform.js:72-77` 已确立的「每条失败路径都要能自我解释」取向不一致。新增 `diagnoseAttachFailure()`，按 root / SIP / 目标是否有 `get-task-allow` / 是否命中重签名副本分别给出可执行提示（含完整重签名命令与「必须保留 app-sandbox」的警告）。
+- **B-2 `findWeChatPid()` 进程匹配过宽**（原 `src/macKeyFrida.js:33` 用 `pgrep -f "WeChat.app/Contents/MacOS/WeChat" | head -1`）：该特征串会命中上表 10 个进程，`head -1` 取到主进程纯属 pid 顺序侥幸；一旦命中 Helper 进程，attach 成功也永远等不到 PBKDF2 调用，表现为「抓取超时」这种更难排查的失败。已改为 `listWeChatMainProcesses()`：按**主二进制完整路径**精确匹配，并把重签名副本排在前面。实测本机现在返回 `[{pid:69723, appPath:"/Applications/WeChat.app", resigned:false}]` 而非 10 选 1。
+- 附带修掉一个注入面：诊断里调用 `codesign`/`csrutil` 用 `execFileSync` + argv 数组，不把路径拼进 shell 字符串（`os.homedir()` 理论上可含 `$()`/空格）。
+
+**用户侧真正要做的事**（不是代码问题，属前置条件缺失）：复制 `/Applications/WeChat.app` 到 `~/Applications/`，用保留 `com.apple.security.app-sandbox`、删除 `application-identifier`/`team-identifier`、加入 `com.apple.security.get-task-allow` 的 entitlements 做 ad-hoc 重签名；**完全退出原版微信**后从 `~/Applications/WeChat.app` 启动，并同时用 `sudo` 运行本命令（先装 frida：主仓库 `node_modules` 里没有它）。若不想动签名，唯一替代是关闭 SIP，属触碰系统安全边界，不推荐。

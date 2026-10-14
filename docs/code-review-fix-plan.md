@@ -2,6 +2,10 @@
 
 按 code-review.md 的优先级给出的落地补丁清单。每条标注影响文件与回归验证方式。
 
+> **行号说明**：已按提交 `3ec089a`（报告多格式模板，重排了 `bin/wcdb.js` 的 action 结构）复核并更新；`src/keyExtract.js` / `src/decrypt.js` / `src/wcdbDecode.js` / `src/extract.js` 未被该提交触及，行号不变。
+>
+> **本会话已修复、尚未提交（`src/macKeyFrida.js`）**：真实 macOS 首跑 `--mac-frida` 失败复盘后新增的两项 —— ① `diagnoseAttachFailure()`：把 frida 的 `Unable to access process with pid N from the current user account` 转成「是否 root / SIP 状态 / 目标有无 `get-task-allow` / 命中的是不是未重签名副本」的可操作提示；② `listWeChatMainProcesses()`：按主二进制完整路径精确匹配，取代会命中 10 个微信相关进程的 `pgrep -f` 特征串。复盘见 code-review.md 附录 B。
+
 ---
 
 ## 第一批：恢复主路径可用性（C-1、M-1）
@@ -32,15 +36,15 @@
 ### 2.1 密钥文件 0600 + 移出共享 tmp
 
 - `src/macKeyFrida.js:11`：`DEFAULT_PASSPHRASE_PATH` 由 `os.tmpdir()/wxdb/passphrase.hex` 改为 `os.homedir()` 下的私有目录（如 `.wcdb-local/`）。
-- `src/macKeyFrida.js:137-138`：`mkdirSync(dir, { recursive: true, mode: 0o700 })` + `writeFileSync(out, data, { encoding: 'utf8', mode: 0o600 })` + `chmodSync(out, 0o600)`（Windows 下 try/catch 忽略）。
-- `bin/wcdb.js:44`、`bin/wcdb.js:55`：写 `keys.json` 同样加 `{ mode: 0o600 }`。
-- `src/macKeyFrida.js:134`：异常信息不再拼接 `captured` 原文，只输出长度与前 8 位。
+- `src/macKeyFrida.js:233-234`：`mkdirSync(dir, { recursive: true, mode: 0o700 })` + `writeFileSync(out, data, { encoding: 'utf8', mode: 0o600 })` + `chmodSync(out, 0o600)`（Windows 下 try/catch 忽略）。
+- `bin/wcdb.js:57`、`bin/wcdb.js:68`：写 `keys.json` 同样加 `{ mode: 0o600 }`。
+- `src/macKeyFrida.js:230`：异常信息不再拼接 `captured` 原文，只输出长度与前 8 位。
 
 验证：`fs.statSync(out).mode & 0o777 === 0o600` 断言。
 
 ### 2.2 stdout 不输出密钥原文
 
-`bin/wcdb.js:58-61`：`console.log('首个候选（供快速试解密）：', cands[0])` → 指纹形式：
+`bin/wcdb.js:71-74`：`console.log('首个候选（供快速试解密）：', cands[0])` → 指纹形式：
 
 ```js
 console.log(`首个候选指纹：${cands[0].slice(0, 8)}…（完整值见 ${opts.out}，请视为机密文件）`);
@@ -48,9 +52,9 @@ console.log(`首个候选指纹：${cands[0].slice(0, 8)}…（完整值见 ${op
 
 ### 2.3 `decrypt` 子命令补 await
 
-`bin/wcdb.js:73`（action 改 `async`）、`bin/wcdb.js:80`（加 `await`）。这让 `bin/wcdb.js:176-180` 的统一「错误：<可操作提示> + exit 1」重新生效。
+`bin/wcdb.js:86`（action 改 `async`）、`bin/wcdb.js:93`（加 `await`）。这让 `bin/wcdb.js:244-249` 的统一「错误：<可操作提示> + exit 1」重新生效。
 
-同时 `bin/wcdb.js:92-95`（`extract`）的 `db.close()` 移入 `finally`，与 `src/pipeline.js:129-135` 对齐。
+同时 `bin/wcdb.js:106-108`（`extract`）的 `db.close()` 移入 `finally`，与 `src/pipeline.js:133-138` 对齐。
 
 验证：新增 CLI smoke test —— 用合成小库 + 错误密钥跑 `node bin/wcdb.js decrypt`，断言 stderr 以 `错误：` 开头、退出码为 1、且不出现堆栈。
 
@@ -64,7 +68,7 @@ console.log(`首个候选指纹：${cands[0].slice(0, 8)}…（完整值见 ${op
 
 ### 3.2 frida 定时器与 promise
 
-`src/macKeyFrida.js:99-130`：保存 `timer` 并在 `finally` 中 `clearTimeout(timer)`；`done` 改标准 `{resolve, reject}`，去掉 `r instanceof Error` 判定；`finally` 内补 `await script.unload()`。
+`src/macKeyFrida.js:196-226`：保存 `timer` 并在 `finally` 中 `clearTimeout(timer)`；`done` 改标准 `{resolve, reject}`，去掉 `r instanceof Error` 判定；`finally` 内补 `await script.unload()`。
 
 验证：成功抓取后进程应立即退出（当前最多多活 90 秒）。
 
@@ -81,7 +85,7 @@ console.log(`首个候选指纹：${cands[0].slice(0, 8)}…（完整值见 ${op
 
 ## 第四批：规范清理（m-2 … m-10）
 
-低改动量，可在同一次提交内带走：`bin/wcdb.js:5` 删除未用的 `path`；`src/extract.js:59/63` 去重兼容列名；`src/extract.js:130` 去掉恒等掩码并兼容 BigInt；`src/extract.js:139` 秒/毫秒按位数判定；`src/extract.js:152-169` 加 `finally` 与一行 warn；`src/platform.js:83` 包 try/catch；`src/macKeyFrida.js:46` 兼容 `Module.findExportByName(null, name)` 并把 `frida` 加进 optionalDependencies；`src/decrypt.js:19` 与 `src/keyExtract.js:13-18` 的版本参数合并到 `src/constants.js`。
+低改动量，可在同一次提交内带走：`bin/wcdb.js:5` 删除未用的 `path`；`src/extract.js:59/63` 去重兼容列名；`src/extract.js:130` 去掉恒等掩码并兼容 BigInt；`src/extract.js:139` 秒/毫秒按位数判定；`src/extract.js:152-169` 加 `finally` 与一行 warn；`src/platform.js:83` 包 try/catch；`src/macKeyFrida.js:129` 兼容 `Module.findExportByName(null, name)` 并把 `frida` 加进 optionalDependencies；`src/decrypt.js:19` 与 `src/keyExtract.js:13-18` 的版本参数合并到 `src/constants.js`。
 
 ---
 

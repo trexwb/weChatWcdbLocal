@@ -190,16 +190,17 @@ function scanProcessMemoryWindows(pid) {
 
 /**
  * 生成 macOS lldb 辅助脚本（模板）。
- * macOS 因 SIP / 代码签名加固，普通进程无法读取微信内存，
- * 需 sudo 或临时关闭 SIP，再 attach 后用 memory find 定位 XOR 掩码附近数据。
+ * macOS 因 SIP / 代码签名加固，读微信内存要求目标带 com.apple.security.get-task-allow：
+ * 副本已重签名（scripts/resign-wechat.sh）且属主与当前用户一致时，直接以普通用户 attach 即可，
+ * 不需要 sudo；只有在目标属主是另一个用户、或未重签名仍被拒时，才把 sudo / 关闭 SIP 当兜底。
  * 此为起点模板，符号/地址需按实际微信版本微调。
  * @param {number} pid
  * @returns {string}
  */
 function generateMacLldbScript(pid) {
   return [
-    '# macOS 微信密钥提取 lldb 辅助脚本（模板，需 sudo 运行）',
-    `# 用法: sudo lldb -p ${pid} -s this_script.lldb`,
+    '# macOS 微信密钥提取 lldb 辅助脚本（模板，同用户 + get-task-allow 下无需 sudo）',
+    `# 用法: lldb -p ${pid} -s this_script.lldb   # 仅在跨用户 / 未重签名仍被拒时才 sudo lldb -p ${pid} -s this_script.lldb`,
     'process attach',
     '# 1) 在内存中搜索 XOR 掩码特征字节（示意，实际需转义）',
     '# memory find --pid <pid> -e "d2c7442458020000"',
@@ -243,7 +244,12 @@ function extractKeys(opts = {}) {
         '  a) 用 --key <hex> 手动提供（推荐）；\n' +
         '  b) 运行 `node bin/wcdb.js key --lldb-script --pid ' +
         pid +
-        '` 生成 lldb 模板，sudo 导出 dump 后 --dump。'
+        '` 生成 lldb 模板；\n' +
+        '     目标为「属主与当前用户一致 + 带 get-task-allow」的重签名副本（scripts/resign-wechat.sh）时，\n' +
+        '     直接以普通用户 attach 即可（lldb -p ' +
+        pid +
+        '），不需要 sudo；导出 dump 后 --dump。\n' +
+        '     仅当目标属主是其他用户、或未重签名仍被拒时，才把 sudo lldb 当兜底。'
     );
   }
   throw new Error('未知平台，请使用 --key 或 --dump');
