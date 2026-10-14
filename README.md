@@ -143,27 +143,58 @@ node bin/wcdb.js decrypt --dir D:\xwechat_files\<wxid>\db_storage --keys keys.js
 - 媒体原文件（图片/视频/语音的 `.dat`）仍是密文，不在本工具范围。
 - Windows 实时扫描与 macOS frida 均触碰系统安全机制，需相应权限。
 
-## 作为 WorkBuddy 技能安装（GitHub）
+## 作为各 agent 的技能安装（GitHub）
 
-本仓库本身即一个 WorkBuddy 技能（`SKILL.md` 在根目录）。推送到 GitHub 后，可直接作为技能安装：
+本仓库根目录的 `SKILL.md` 遵循 **Agent Skills 标准**（`name` + `description` frontmatter + Markdown 正文），可被各类 agent 客户端识别。推送到 GitHub 后即可直接安装。
 
-**方式 A：WorkBuddy 内置「从 URL 安装技能」**
+**方式 A：客户端内置「从 URL 安装技能」（推荐）**
 
-在 WorkBuddy 的技能中心 / 安装入口粘贴本仓库的 GitHub 地址，WorkBuddy 会识别根目录的 `SKILL.md` 完成安装。
+在客户端的技能中心 / 安装入口粘贴本仓库的 GitHub 地址，客户端会读取根目录 `SKILL.md` 完成安装：
+
+| Agent | 说明 |
+|-------|------|
+| WorkBuddy | 技能中心粘贴仓库地址 |
+| CodeBuddy | 技能中心粘贴仓库地址 |
+| Qoder | 技能中心粘贴仓库地址 |
+| Claude Code | 支持 Agent Skills，粘贴仓库地址或克隆到技能目录 |
 
 **方式 B：手动放置（等价）**
 
 ```bash
-# 用户级（对所有项目可用）
-git clone <本仓库地址> ~/.workbuddy/skills/wechat-wcdb-local
-# 或项目级（仅当前仓库协作成员可用）
-git clone <本仓库地址> .workbuddy/skills/wechat-wcdb-local
-cd ~/.workbuddy/skills/wechat-wcdb-local && npm install
+git clone <本仓库地址> <目标技能目录>/wechat-wcdb-local
+cd <目标技能目录>/wechat-wcdb-local && npm install
 ```
 
-安装后在对话中提及「解密微信数据库 / 提取微信聊天记录」等意图，技能即被触发。技能附带的 Node 工具需先 `npm install`（解密为纯 JS 实现，无需原生编译）。
+`<目标技能目录>` 按客户端取：
+
+| Agent | 用户级目录 | 项目级目录 |
+|-------|-----------|-----------|
+| WorkBuddy | `~/.workbuddy/skills/` | `.workbuddy/skills/` |
+| CodeBuddy | `~/.codebuddy/skills/` | `.codebuddy/skills/` |
+| Claude Code | `~/.claude/skills/` | `.claude/skills/` |
+| Qoder | 其技能目录（或用方式 A） | 同左 |
+
+安装后在对话中提及「解密微信数据库 / 提取微信聊天记录」等意图，技能即被触发；客户端会先弹出**权限确认窗**，用户同意后自动执行。
 
 > 技能目录名建议与 `SKILL.md` 中 `name: wechat-wcdb-local` 保持一致，便于管理。
+> frontmatter 的 `agent_created` 是 WorkBuddy 专有字段，其他 agent 会忽略，不影响加载。
+
+## 一键流水线（授权后）
+
+用户同意授权后，一条命令完成「取密钥 → 解密 → 提取 → 报告」：
+
+```bash
+# 已知 passphrase
+node bin/wcdb.js pipeline --username wxid_目标 --self-wxid wxid_本人 --key <passphrase_hex>
+
+# Windows：内存 dump 取密钥
+node bin/wcdb.js pipeline --username wxid_目标 --dump wcdb_blob.bin
+
+# macOS：frida 抓取（需重签名微信 + root）
+sudo node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
+```
+
+产出 `messages.json` 与 `report.html`。密钥来源缺失或平台不匹配时，会抛出含可执行提示的异常（agent 应原样回传用户）。
 
 ## License
 

@@ -12,6 +12,8 @@ const { xorDecode, collectCandidates } = require('../src/keyExtract');
 const { extractChat } = require('../src/extract');
 const { deriveEncKey } = require('../src/decrypt');
 const { decryptBuffer, encryptBuffer, PAGE_SIZE } = require('../src/wcdbDecode');
+const { resolveKeySource } = require('../src/pipeline');
+const { resolveDataDir } = require('../src/platform');
 
 let pass = 0;
 let fail = 0;
@@ -157,6 +159,73 @@ async function testExtract() {
   assert(chat.messages[5].local_type === 49, 'local_type 低 32 位掩码：244813135921 -> 49');
 }
 
+// ── 7. 一键流水线：密钥来源决策（纯函数，无 I/O）──
+function testPipeline() {
+  // eslint-disable-next-line no-console
+  console.log('[pipeline.resolveKeySource]');
+  assert(resolveKeySource({ key: 'ab'.repeat(32) }) === 'manual', '显式 --key -> manual');
+  assert(resolveKeySource({ candidates: ['ab'.repeat(32)] }) === 'provided', '已给候选 -> provided');
+  assert(resolveKeySource({ dump: '/tmp/x.bin' }) === 'dump', '--dump -> dump（跨平台可测）');
+  assert(
+    resolveKeySource({ key: 'ab'.repeat(32), dump: '/tmp/x.bin' }) === 'manual',
+    '优先级：manual 高于 dump'
+  );
+
+  // 无来源时必须抛出可执行提示（供 agent 弹窗后仍缺参数时回传用户）
+  let threw = false;
+  let msg = '';
+  try {
+    resolveKeySource({});
+  } catch (e) {
+    threw = true;
+    msg = e.message;
+  }
+  assert(threw && /--key|--dump|--keys|--mac-frida|--allow-memory-scan/.test(msg), '无密钥来源时抛出含可执行提示的异常');
+
+  // 平台门禁：非 macOS 不得选 mac-frida；非 Windows 不得选 win-memory-scan
+  const isMac = process.platform === 'darwin';
+  const isWin = process.platform === 'win32';
+  let fridaOk = true;
+  try {
+    resolveKeySource({ macFrida: true });
+  } catch (e) {
+    fridaOk = false;
+  }
+  assert(fridaOk === isMac, 'mac-frida 仅在 darwin 可选（平台门禁）');
+  let scanOk = true;
+  try {
+    resolveKeySource({ allowMemoryScan: true });
+  } catch (e) {
+    scanOk = false;
+  }
+  assert(scanOk === isWin, 'win-memory-scan 仅在 win32 可选（平台门禁）');
+}
+
+// ── 8. 平台健壮性：权限错误必须转为可操作提示，不得裸崩 ──
+function testPlatformGuard() {
+  // eslint-disable-next-line no-console
+  console.log('[platform] 数据目录定位的健壮性');
+  let err = null;
+  let dir;
+  try {
+    dir = resolveDataDir({});
+  } catch (e) {
+    err = e;
+  }
+  // 裸的 fs 权限错误会带 code=EPERM/EACCES，必须已被平台层转为可操作提示
+  const rawFsError = err && (err.code === 'EPERM' || err.code === 'EACCES');
+  assert(!rawFsError, 'resolveDataDir 不得抛出裸的 EPERM/EACCES（应转可操作提示或返回 null）');
+  // 契约：要么解出路径、要么返回 null、要么抛出「已转换」的可操作 Error；三者都合法
+  const okResult =
+    typeof dir === 'string' || dir === null || (err instanceof Error && !err.code);
+  assert(
+    okResult,
+    'resolveDataDir 返回路径 / null / 已转换的 Error（实际：' +
+      (err ? 'throws(' + (err.code || 'converted') + ')' : dir === null ? 'null' : typeof dir) +
+      '）'
+  );
+}
+
 (async function main() {
   testTableName();
   testKey();
@@ -164,6 +233,8 @@ async function testExtract() {
   testWcdbDecode();
   await testZstd();
   await testExtract();
+  testPipeline();
+  testPlatformGuard();
   // eslint-disable-next-line no-console
   console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
   process.exit(fail ? 1 : 0);

@@ -63,8 +63,22 @@ function resolveMacDataDir(wxid) {
     'com.tencent.xinWeChat'
   );
   if (!fs.existsSync(base)) return null;
+  let versions;
+  try {
+    versions = fs.readdirSync(base);
+  } catch (e) {
+    // macOS 沙盒/隐私权限会在此拒绝访问（EPERM/EACCES），必须转成可操作提示，
+    // 否则会抛出裸异常崩溃，用户无从得知需要「完全磁盘访问权限」。
+    if (e.code === 'EPERM' || e.code === 'EACCES') {
+      throw new Error(
+        '读取微信数据目录被系统拒绝（' + e.code + '）。macOS 请在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」中' +
+          '为本终端 / agent 授权；或把 db_storage 复制到可读位置后用 --dir 指定。'
+      );
+    }
+    return null;
+  }
   let candidates = [];
-  for (const ver of fs.readdirSync(base)) {
+  for (const ver of versions) {
     const verDir = path.join(base, ver);
     if (!fs.statSync(verDir).isDirectory()) continue;
     if (wxid) {

@@ -1,6 +1,6 @@
 ---
 name: wechat-wcdb-local
-description: 微信桌面版 4.x（WCDB/SQLCipher4）本地数据库离线解密与聊天记录提取的 Node.js 跨平台工具（Windows/macOS）。当用户需要从自己设备解密微信 WCDB 加密数据库、提取 Msg_ 表聊天消息、获取微信数据库密钥（Windows 内存 XOR / macOS frida），或生成聊天记录 HTML 报告时使用本技能。
+description: 微信桌面版 4.x（WCDB/SQLCipher4）本地数据库离线解密与聊天记录提取的 Node.js 跨平台工具（Windows/macOS），可作为 WorkBuddy / CodeBuddy / Qoder / Claude 等各类 agent 的技能从 GitHub 直接安装。当用户需要从自己设备一键解密微信 WCDB 加密数据库、提取 Msg_ 表聊天消息、获取微信数据库密钥（Windows 内存 dump 或扫描 / macOS frida），或生成聊天记录 HTML 报告时使用本技能。
 agent_created: true
 ---
 
@@ -16,6 +16,37 @@ agent_created: true
 - 用户想提取某个会话（`Msg_<md5(username)>` 表）的聊天消息。
 - 用户需要获取微信数据库密钥：Windows 从进程内存 dump 提取，macOS 用 frida 抓取 `CCKeyDerivationPBKDF` 的 passphrase。
 - 用户想把提取结果生成可读的 HTML 报告。
+
+## 权限与风险声明（供宿主弹窗确认）
+
+本技能在执行前需要用户知情同意。**宿主 agent（WorkBuddy / CodeBuddy / Qoder / Claude 等）应在弹窗中向用户展示下列清单**，用户点「同意」后才继续：
+
+- **读取本地微信数据目录**：`db_storage` 下的 `message_*.db / contact.db / session.db`（Windows 由 `%APPDATA%\Tencent\xwechat\config\*.ini` 定位，macOS 在 `~/Library/Containers/com.tencent.xinWeChat/...`）。
+- **读取微信进程内存**（可选，仅在用户显式要求自动取密钥时）：Windows 走 `--allow-memory-scan`（调 `Kernel32` 读进程内存）；macOS 走 `--mac-frida`（frida 附加微信进程拦截 `CCKeyDerivationPBKDF`）。
+- **本机执行 Node 命令**并**写出明文数据库与结果文件**：`plain/*.plain.db`、`messages.json`、`report.html`。
+- **不联网、不上传**：全程本机离线处理，任何数据不发送到外部。
+- **敏感提示**：产物中包含明文聊天记录与数据库密钥（`keys.json` / passphrase），使用完毕后应删除。
+
+前置原则：**仅用于读取用户自己设备上的微信数据**（本地取证 / 备份 / 归档），不得用于未经授权访问他人数据，需遵守当地法律法规与微信用户协议。
+
+## 一键流水线（授权通过后调用）
+
+用户同意授权后，运行**一条命令**即可完成「取密钥 → 解密 → 提取 → 报告」：
+
+```bash
+# 已知 passphrase（最通用）
+node bin/wcdb.js pipeline --username wxid_目标 --self-wxid wxid_本人 --key <passphrase_hex>
+
+# Windows：从内存 dump 取密钥
+node bin/wcdb.js pipeline --username wxid_目标 --dump wcdb_blob.bin
+
+# macOS：frida 抓取（需重签名微信 + root，在启动瞬间抓）
+sudo node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
+```
+
+输出：`messages.json`（结构化消息）与 `report.html`（可直接打开的聊天记录报告）。
+
+若密钥来源缺失或平台不匹配，命令会抛出**含可执行提示**的异常（如「请提供 --key / --dump / --keys；macOS 可用 --mac-frida，Windows 可用 --allow-memory-scan」），agent 应把该提示原样回传给用户。
 
 ## 打包的工具
 
@@ -93,6 +124,21 @@ npm test
 - **路径跨平台**：临时文件统一用 `os.tmpdir()` + `path.join` 构造（如 passphrase 落盘 `wxdb/passphrase.hex`），不写死 `/tmp`，Windows 上自动落到 `AppData\Local\Temp`。
 - **依赖双平台可用**：`@foxglove/wasm-zstd`（wasm 无原生）、`better-sqlite3`（有 win/mac 预编译）、`commander`（纯 JS）、`koffi`（有 win/mac 预编译）均可在两系统 `npm install`；`sqlcipher` 仅为 `optionalDependencies` 回退；`frida` 仅 macOS 按需 `npm install frida`。
 - **CLI 跨平台**：`bin/wcdb.js` 用 `#!/usr/bin/env node`，Windows 下 npm 自动生成 `.cmd` 包装，`wcdb` 命令可用。
+
+## 跨 agent 兼容性
+
+本技能采用**单一通用 `SKILL.md`**（遵循 Agent Skills 标准：YAML frontmatter 的 `name` + `description`，Markdown 正文），因此可被各类 agent 客户端识别：
+
+| Agent | 安装位置（手动放置时） |
+|-------|----------------------|
+| WorkBuddy | `~/.workbuddy/skills/wechat-wcdb-local/` |
+| CodeBuddy | `~/.codebuddy/skills/wechat-wcdb-local/` |
+| Claude Code | `~/.claude/skills/wechat-wcdb-local/` |
+| Qoder | 其技能目录，或从 GitHub URL 直接安装 |
+
+- **从 GitHub 直接安装**：在客户端的「技能中心 / 从 URL 安装」粘贴本仓库地址即可，客户端会读取根目录 `SKILL.md`。
+- frontmatter 中的 `agent_created` 为 WorkBuddy 专有字段，其他 agent 会忽略未知字段，不影响加载。
+- 技能目录名建议与 `name: wechat-wcdb-local` 保持一致，便于管理。
 
 ## 关键注意事项
 

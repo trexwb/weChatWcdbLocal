@@ -11,6 +11,7 @@ const { decryptSelective } = require('../src/decrypt');
 const { openPlain, extractChat, loadContacts } = require('../src/extract');
 const { writeReport } = require('../src/report');
 const { resolveDataDir } = require('../src/platform');
+const { runPipeline } = require('../src/pipeline');
 
 const program = new Command();
 
@@ -118,8 +119,63 @@ program
     console.log('建议用浏览器或 headless 截图做一次渲染级目视核验（表格对齐 / 文字清晰 / 无错位）。');
   });
 
-program.parse(process.argv);
+// ──────────────────────── 5. pipeline ────────────────────────
+program
+  .command('pipeline')
+  .description('一键流水线：授权后自动完成 取密钥 → 解密 → 提取 → 报告（供 agent 弹窗授权后调用）')
+  .option('--dir <dir>', 'db_storage 目录（默认按平台自动定位）')
+  .option('--wxid <wxid>', '本账号 wxid（辅助定位数据目录）')
+  .option('--key <hex>', '直接提供 passphrase hex')
+  .option('--keys <file>', '候选密钥 JSON 文件（显式传入才生效，避免误用旧文件）')
+  .option('--dump <file>', '内存 dump 文件（跨平台）')
+  .option('--mac-frida', 'macOS：frida 抓取 passphrase（需重签名微信 + root）')
+  .option('--allow-memory-scan', 'Windows：启用实时内存扫描（实验性）')
+  .option('--pid <pid>', '指定微信进程 PID', (v) => parseInt(v, 10))
+  .requiredOption('--username <wxid>', '要提取的会话 wxid 或群 id')
+  .option('--self-wxid <wxid>', '本账号 wxid，用于判定“自己发的消息”')
+  .option('--files <list>', '仅解密指定文件，逗号分隔', (v) => v.split(',').map((s) => s.trim()))
+  .option('--out-dir <dir>', '明文输出目录', 'plain')
+  .option('-o, --out <file>', 'messages.json 路径', 'messages.json')
+  .option('--html <file>', 'HTML 报告路径', 'report.html')
+  .action(async (opts) => {
+    let candidates;
+    if (opts.keys) {
+      if (!fs.existsSync(opts.keys)) throw new Error('--keys 文件不存在：' + opts.keys);
+      candidates = JSON.parse(fs.readFileSync(opts.keys, 'utf8'));
+    }
+    const r = await runPipeline({
+      dir: opts.dir,
+      wxid: opts.wxid,
+      key: opts.key,
+      candidates,
+      dump: opts.dump,
+      macFrida: opts.macFrida,
+      allowMemoryScan: opts.allowMemoryScan,
+      pid: opts.pid,
+      username: opts.username,
+      selfWxid: opts.selfWxid,
+      files: opts.files,
+      outDir: opts.outDir,
+      outJson: opts.out,
+      outHtml: opts.html
+    });
+    // eslint-disable-next-line no-console
+    console.log(
+      `一键完成：密钥来源=${r.keySource} ｜ 解密 ${r.decryptedFiles} 个库 ｜ 提取 ${r.count} 条消息`
+    );
+    // eslint-disable-next-line no-console
+    console.log(`  JSON -> ${r.jsonOut}`);
+    // eslint-disable-next-line no-console
+    console.log(`  HTML -> ${r.htmlOut}`);
+  });
 
 if (!process.argv.slice(2).length) {
   program.outputHelp();
+} else {
+  // 统一兜住同步/异步异常，输出可操作提示而非裸栈
+  program.parseAsync(process.argv).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('错误：' + (err && err.message ? err.message : String(err)));
+    process.exit(1);
+  });
 }
