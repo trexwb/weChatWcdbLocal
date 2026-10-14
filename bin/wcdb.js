@@ -42,7 +42,10 @@ async function buildProgram(Command) {
     .option('--pid <pid>', '指定微信进程 PID', (v) => parseInt(v, 10))
     .option('--allow-memory-scan', '启用实验性实时内存扫描（默认关闭）')
     .option('--lldb-script', '生成 macOS lldb 辅助脚本并退出')
-    .option('--mac-frida', 'macOS：用 frida 在微信启动时抓取 passphrase（需重签名微信 + root）')
+    .option(
+      '--mac-frida',
+      'macOS：用 frida 在微信启动时抓取 passphrase（需重签名副本，见 scripts/resign-wechat.sh；同用户非 root 即可，无需 sudo）'
+    )
     .option('-o, --out <file>', '候选密钥输出文件', 'keys.json')
     .action(async (opts) => {
       if (opts.lldbScript) {
@@ -166,7 +169,7 @@ async function buildProgram(Command) {
     .option('--key <hex>', '直接提供 passphrase hex')
     .option('--keys <file>', '候选密钥 JSON 文件（显式传入才生效，避免误用旧文件）')
     .option('--dump <file>', '内存 dump 文件（跨平台）')
-    .option('--mac-frida', 'macOS：frida 抓取 passphrase（需重签名微信 + root）')
+    .option('--mac-frida', 'macOS：frida 抓取 passphrase（需重签名副本，见 scripts/resign-wechat.sh；同用户非 root 即可，无需 sudo）')
     .option('--allow-memory-scan', 'Windows：启用实时内存扫描（实验性）')
     .option('--pid <pid>', '指定微信进程 PID', (v) => parseInt(v, 10))
     .requiredOption('--username <wxid>', '要提取的会话 wxid 或群 id')
