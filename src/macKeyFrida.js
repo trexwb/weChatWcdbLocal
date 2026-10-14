@@ -1,7 +1,14 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { execSync } = require('child_process');
+
+/**
+ * passphrase 默认落盘路径，跨平台（Windows 用 os.tmpdir()，避免写死 /tmp）。
+ */
+const DEFAULT_PASSPHRASE_PATH = path.join(os.tmpdir(), 'wxdb', 'passphrase.hex');
 
 /**
  * macOS 微信密钥抓取（frida 方案，来源：wechat-chatlog-export-mac）。
@@ -62,7 +69,7 @@ const HOOK_SOURCE = `
  * 会轮询等待微信进程出现并 attach，直到抓到 passphrase 或超时。
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs] 等待超时（默认 90s）
- * @param {string} [opts.out] 写出 passphrase 的文件（默认 /tmp/wxdb/passphrase.hex）
+ * @param {string} [opts.out] 写出 passphrase 的文件（默认跨平台临时目录下的 wxdb/passphrase.hex）
  * @returns {Promise<string>} passphrase hex（64 字符）
  */
 async function capturePassphraseViaFrida(opts = {}) {
@@ -126,10 +133,10 @@ async function capturePassphraseViaFrida(opts = {}) {
   if (!/^[0-9a-f]{64}$/.test(captured)) {
     throw new Error('抓到的 passphrase 格式异常（应为 64 hex）：' + captured);
   }
-  const out = opts.out || '/tmp/wxdb/passphrase.hex';
+  const out = opts.out || DEFAULT_PASSPHRASE_PATH;
   fs.mkdirSync(require('path').dirname(out), { recursive: true });
   fs.writeFileSync(out, captured, 'utf8');
   return captured;
 }
 
-module.exports = { capturePassphraseViaFrida, findWeChatPid, HOOK_SOURCE };
+module.exports = { capturePassphraseViaFrida, findWeChatPid, HOOK_SOURCE, DEFAULT_PASSPHRASE_PATH };

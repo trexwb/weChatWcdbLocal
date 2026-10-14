@@ -84,6 +84,16 @@ node bin/wcdb.js report --in messages.json --out report.html
 npm test
 ```
 
+## 跨平台兼容性
+
+本技能**同时支持 Windows 与 macOS**，关键保证如下：
+
+- **平台探测**：`detectPlatform()` 用 `process.platform` 区分 `win32` / `darwin` / 其他，数据目录定位各自独立实现（`resolveWindowsDataDir` 读 `%APPDATA%`+`.ini`，`resolveMacDataDir` 扫 `~/Library/Containers/com.tencent.xinWeChat/...`）。
+- **平台代码隔离**：Windows 实时内存扫描（`Kernel32.dll` + koffi）与 macOS frida 抓取互相隔离，未命中对应平台时给出明确指引而非崩溃；`koffi` / `frida` 均为**惰性 `require`**，不会在另一平台加载期报错。
+- **路径跨平台**：临时文件统一用 `os.tmpdir()` + `path.join` 构造（如 passphrase 落盘 `wxdb/passphrase.hex`），不写死 `/tmp`，Windows 上自动落到 `AppData\Local\Temp`。
+- **依赖双平台可用**：`@foxglove/wasm-zstd`（wasm 无原生）、`better-sqlite3`（有 win/mac 预编译）、`commander`（纯 JS）、`koffi`（有 win/mac 预编译）均可在两系统 `npm install`；`sqlcipher` 仅为 `optionalDependencies` 回退；`frida` 仅 macOS 按需 `npm install frida`。
+- **CLI 跨平台**：`bin/wcdb.js` 用 `#!/usr/bin/env node`，Windows 下 npm 自动生成 `.cmd` 包装，`wcdb` 命令可用。
+
 ## 关键注意事项
 
 - **法律与隐私**：仅用于读取本人设备数据，遵守当地法律法规与微信用户协议；全程本机处理，数据不上传。

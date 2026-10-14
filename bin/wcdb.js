@@ -6,7 +6,7 @@ const path = require('path');
 const { Command } = require('commander');
 
 const { extractKeys, generateMacLldbScript } = require('../src/keyExtract');
-const { capturePassphraseViaFrida } = require('../src/macKeyFrida');
+const { capturePassphraseViaFrida, DEFAULT_PASSPHRASE_PATH } = require('../src/macKeyFrida');
 const { decryptSelective } = require('../src/decrypt');
 const { openPlain, extractChat, loadContacts } = require('../src/extract');
 const { writeReport } = require('../src/report');
@@ -42,7 +42,7 @@ program
       // 同时以 passphrase 候选形式写回 keys.json，便于 decrypt 直接复用
       fs.writeFileSync(opts.out, JSON.stringify([ph], null, 2), 'utf8');
       // eslint-disable-next-line no-console
-      console.log(`已抓取 passphrase 并写入 ${opts.out}（同时存于 /tmp/wxdb/passphrase.hex）`);
+      console.log(`已抓取 passphrase 并写入 ${opts.out}（同时存于 ${DEFAULT_PASSPHRASE_PATH}）`);
       return;
     }
     const cands = extractKeys({
