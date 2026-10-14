@@ -10,7 +10,7 @@ const { xorDecode, collectCandidates, extractKeysFromDump, extractKeys, scanProc
 const { capturePassphraseViaFrida, DEFAULT_PASSPHRASE_PATH } = require('./macKeyFrida');
 const { decryptDatabase, decryptSelective } = require('./decrypt');
 const { openPlain, extractChat, loadContacts } = require('./extract');
-const { buildReport, writeReport } = require('./report');
+const { buildReport, writeReport, writeReports, templates } = require('./report');
 const { msgTableName, WINDOWS_CONFIG_XOR_MASK, ZSTD_MAGIC } = require('./constants');
 
 module.exports = {
@@ -36,9 +36,15 @@ module.exports = {
   openPlain,
   extractChat,
   loadContacts,
-  // report
+  // report（html / md / json 多格式 + 自定义模板）
   buildReport,
   writeReport,
+  writeReports,
+  templates,
+  listFormats: templates.listFormats,
+  renderWithTemplate: templates.renderWithTemplate,
+  outPathFor: templates.outPathFor,
+  detectFormat: templates.detectFormat,
   // constants
   msgTableName,
   WINDOWS_CONFIG_XOR_MASK,

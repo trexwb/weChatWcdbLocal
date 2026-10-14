@@ -42,8 +42,14 @@ wechat-wcdb-node/
 │   ├── macKeyFrida.js     # macOS frida 抓 passphrase
 │   ├── decrypt.js         # passphrase + 每库 salt -> enc_key -> SQLCipher 解密
 │   ├── extract.js         # 消息提取（zstd / local_type / real_sender_id 反推）
-│   └── report.js          # HTML 报告生成
-├── test/selftest.js       # 纯 JS 部分自测（zstd / 派生 / 提取）
+│   ├── report.js          # 报告输出层：单/多格式分发 + 自定义模板载入
+│   └── templates/         # 报告模板注册中心
+│       ├── helpers.js     # 转义 / 昵称解析 / 数据归一化（各格式共用）
+│       ├── html.js        # HTML 模板
+│       ├── markdown.js    # Markdown 模板
+│       ├── json.js        # JSON 模板（带 meta 与昵称，供其它应用解析）
+│       └── index.js       # 注册表 + 格式推断 + 扩展名改写
+├── test/selftest.js       # 纯 JS 部分自测（zstd / 派生 / 提取 / 报告模板）
 └── package.json
 ```
 
@@ -75,8 +81,10 @@ node bin/wcdb.js decrypt --dir /path/to/db_storage --key <passphrase_hex> --out 
 # 2) 提取某会话
 node bin/wcdb.js extract --db plain/message_0.plain.db --username wxid_xxxx --self-wxid wxid_you --out messages.json
 
-# 3) 生成 HTML 报告
-node bin/wcdb.js report --in messages.json --out report.html
+# 3) 生成报告：HTML / Markdown / JSON 可一次同时产出
+node bin/wcdb.js report --in messages.json -f html,md,json
+#   -> report.html / report.md / report.json（路径会打印出来）
+#   只要 Markdown：-o report.md 或 -f md
 ```
 
 ### Windows：自动提取密钥
@@ -194,7 +202,58 @@ node bin/wcdb.js pipeline --username wxid_目标 --dump wcdb_blob.bin
 sudo node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
 ```
 
-产出 `messages.json` 与 `report.html`。密钥来源缺失或平台不匹配时，会抛出含可执行提示的异常（agent 应原样回传用户）。
+产出 `messages.json`，报告默认 `report.html`；加 `-f html,md,json` 即可一次拿到 Markdown / JSON，运行结束会打印每个文件的路径。密钥来源缺失或平台不匹配时，会抛出含可执行提示的异常（agent 应原样回传用户）。
+
+## 报告格式与模板
+
+三种内置格式由 `src/templates/` 提供，共用同一份归一化数据（昵称解析、`create_time_iso` 补全、`meta` 统计），因此字段语义一致：
+
+| 格式 | 说明 | 典型用途 |
+|------|------|----------|
+| `html` | 自包含 HTML，CSS 内联 | 人看：浏览器直接打开、截图 |
+| `md` | Markdown：标题 + 表格（单元格内 `\|` 与换行已转义） | 贴文档、喂 LLM、转 HTML/PDF |
+| `json` | 结构化：`meta` / `selfWxid` / `contacts` / `chats[]`，每条消息带 `sender_name` | 其它应用直接解析 |
+
+```bash
+# 只出 Markdown（扩展名自动推断格式）
+node bin/wcdb.js report --in messages.json -o report.md
+
+# HTML 与 JSON 同时产出，并通知各自路径
+node bin/wcdb.js report --in messages.json -f html,json
+
+# json 压成单行
+node bin/wcdb.js report --in messages.json -f json --compact
+
+# 流水线里同样生效
+node bin/wcdb.js pipeline --username wxid_目标 --key <hex> -f html,md,json
+```
+
+输出示例：
+
+```
+报告已生成（3 个文件）：
+  HTML -> report.html
+  MD -> report.md
+  JSON -> report.json
+```
+
+### 自定义模板
+
+不想改仓库代码也能扩展新格式（csv / txt / 推送给下游的 JSON 方言等）：写一个 JS 模块，导出 `(data, ctx) => string`，用 `--template` 指定即可。
+
+```js
+// my-tpl.js：ctx 提供 escapeHtml / escapeMdCell / resolveName / normalizeReport 等辅助
+module.exports = (data, ctx) =>
+  data.chats
+    .map((c) => c.messages.map((m) => `${ctx.displayTime(m)}\t${m.sender}\t${m.content}`).join('\n'))
+    .join('\n');
+```
+
+```bash
+node bin/wcdb.js report --in messages.json --template ./my-tpl.js -o out.txt
+```
+
+以库方式使用时：`renderReport(data, 'md')` / `writeReports('report.html', data, ['html','md','json'])` / `renderWithTemplate(path, data)`。
 
 ## License
 

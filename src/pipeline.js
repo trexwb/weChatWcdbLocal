@@ -17,7 +17,8 @@ const { extractKeysFromDump, extractKeys } = require('./keyExtract');
 const { capturePassphraseViaFrida } = require('./macKeyFrida');
 const { decryptSelective } = require('./decrypt');
 const { openPlain, extractChat, loadContacts } = require('./extract');
-const { writeReport } = require('./report');
+const { writeReports } = require('./report');
+const templates = require('./templates');
 
 function normalizeKey(k) {
   return String(k).replace(/^0x/, '').toLowerCase();
@@ -91,8 +92,10 @@ async function obtainCandidates(opts, source) {
  * @param {string} [opts.selfWxid] 本账号 wxid（判定“自己发的”）
  * @param {string} [opts.outDir] 明文输出目录，默认 plain
  * @param {string} [opts.outJson] messages.json 路径
- * @param {string} [opts.outHtml] report.html 路径
- * @returns {Promise<object>} 结果摘要
+ * @param {string} [opts.outHtml] 报告基准路径（report.html），多格式时扩展名按格式改写
+ * @param {string[]} [opts.formats] 报告格式：html / md / json，默认 ['html']
+ * @param {string} [opts.template] 自定义模板 JS 模块路径
+ * @returns {Promise<object>} 结果摘要（含 reports: [{format, path}]）
  */
 async function runPipeline(opts = {}) {
   const outDir = opts.outDir || 'plain';
@@ -141,7 +144,15 @@ async function runPipeline(opts = {}) {
     meta: { dataDir: dir, keySource: source, decryptedFiles: decrypted.length }
   };
   fs.writeFileSync(jsonOut, JSON.stringify(payload, null, 2), 'utf8');
-  writeReport(htmlOut, payload);
+
+  // 报告：默认只出 HTML；formats 可指定多种（html,md,json），扩展名自动改写
+  const formats = (opts.formats && opts.formats.length ? opts.formats : ['html']).map((f) =>
+    templates.normalizeFormat(f)
+  );
+  const reports = writeReports(htmlOut, payload, formats, {
+    template: opts.template,
+    compact: !!opts.compact
+  });
 
   return {
     keySource: source,
@@ -149,7 +160,8 @@ async function runPipeline(opts = {}) {
     decryptedFiles: decrypted.length,
     count: chat.count,
     jsonOut,
-    htmlOut
+    htmlOut: (reports.find((r) => r.format === 'html') || {}).path || null,
+    reports
   };
 }
 

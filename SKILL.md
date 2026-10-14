@@ -15,7 +15,7 @@ agent_created: true
 - 用户想解密自己电脑上的微信数据目录（`db_storage` 下的 `*.db`）。
 - 用户想提取某个会话（`Msg_<md5(username)>` 表）的聊天消息。
 - 用户需要获取微信数据库密钥：Windows 从进程内存 dump 提取，macOS 用 frida 抓取 `CCKeyDerivationPBKDF` 的 passphrase。
-- 用户想把提取结果生成可读的 HTML 报告。
+- 用户想把提取结果生成可读报告，或导出给其它应用消费：`html`（人看）/ `md`（文档、LLM）/ `json`（程序解析），可一次同时产出；也可用 `--template` 挂自定义模板。
 
 ## 权限与风险声明（供宿主弹窗确认）
 
@@ -23,7 +23,7 @@ agent_created: true
 
 - **读取本地微信数据目录**：`db_storage` 下的 `message_*.db / contact.db / session.db`（Windows 由 `%APPDATA%\Tencent\xwechat\config\*.ini` 定位，macOS 在 `~/Library/Containers/com.tencent.xinWeChat/...`）。
 - **读取微信进程内存**（可选，仅在用户显式要求自动取密钥时）：Windows 走 `--allow-memory-scan`（调 `Kernel32` 读进程内存）；macOS 走 `--mac-frida`（frida 附加微信进程拦截 `CCKeyDerivationPBKDF`）。
-- **本机执行 Node 命令**并**写出明文数据库与结果文件**：`plain/*.plain.db`、`messages.json`、`report.html`。
+- **本机执行 Node 命令**并**写出明文数据库与结果文件**：`plain/*.plain.db`、`messages.json`，以及报告文件 `report.html` / `report.md` / `report.json`（按所选格式生成）。
 - **不联网、不上传**：全程本机离线处理，任何数据不发送到外部。
 - **敏感提示**：产物中包含明文聊天记录与数据库密钥（`keys.json` / passphrase），使用完毕后应删除。
 
@@ -44,7 +44,9 @@ node bin/wcdb.js pipeline --username wxid_目标 --dump wcdb_blob.bin
 sudo node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
 ```
 
-输出：`messages.json`（结构化消息）与 `report.html`（可直接打开的聊天记录报告）。
+输出：`messages.json`（结构化消息）与报告文件（默认 `report.html`，加 `-f html,md,json` 可同时得到 `report.md` / `report.json`；各文件路径会在结束时打印）。
+
+若生成了 `md` / `json` 报告，agent 应在回复中**明确告知用户这些文件的路径**，便于用户用其它应用直接打开或二次加工。
 
 若密钥来源缺失或平台不匹配，命令会抛出**含可执行提示**的异常（如「请提供 --key / --dump / --keys；macOS 可用 --mac-frida，Windows 可用 --allow-memory-scan」），agent 应把该提示原样回传给用户。
 
@@ -60,7 +62,8 @@ sudo node bin/wcdb.js pipeline --username wxid_目标 --mac-frida
 - `src/decrypt.js` — passphrase + 每库 salt → enc_key → 解密调度
 - `src/wcdbDecode.js` — 纯 JS WCDB/SQLCipher4 页面解码（AES-256-CBC + HMAC-SHA512）
 - `src/extract.js` — 消息提取（zstd / local_type / real_sender_id 反推）
-- `src/report.js` — HTML 报告生成
+- `src/report.js` — 报告输出层：单/多格式分发（html/md/json）+ 自定义模板载入
+- `src/templates/` — 报告模板：注册中心 `index.js`、`helpers.js`（转义 / 昵称 / 归一化）、`html.js`、`markdown.js`、`json.js`
 
 详细的加密格式、密钥模型与已知陷阱见 `references/wcdb-crypto.md`。
 
@@ -106,8 +109,14 @@ node bin/wcdb.js extract --db plain/message_0.plain.db --username wxid_xxxx --se
 ### 5. 生成报告
 
 ```bash
+# 只出 HTML
 node bin/wcdb.js report --in messages.json --out report.html
+
+# 一次同时产出 HTML / Markdown / JSON（供其它应用直接用），运行结束会打印各文件路径
+node bin/wcdb.js report --in messages.json -f html,md,json
 ```
+
+格式：`html` 给人看；`md` 贴文档 / 喂 LLM；`json` 带 `meta` 与 `sender_name`，供程序解析。三种格式共用同一份归一化数据，字段语义一致。需要别的格式时用 `--template <file.js>`（模块导出 `(data, ctx) => string`）。
 
 ### 6. 自测
 

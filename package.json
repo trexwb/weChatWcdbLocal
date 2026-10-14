@@ -1,6 +1,6 @@
 {
   "name": "wechat-wcdb-node",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "微信桌面版 4.x (WCDB) 本地数据库离线解密与消息提取 —— Node.js 跨平台（Windows / macOS）实现",
   "bin": {
     "wcdb": "bin/wcdb.js"

@@ -14,6 +14,7 @@ const { deriveEncKey } = require('../src/decrypt');
 const { decryptBuffer, encryptBuffer, PAGE_SIZE } = require('../src/wcdbDecode');
 const { resolveKeySource } = require('../src/pipeline');
 const { resolveDataDir } = require('../src/platform');
+const { buildReport, writeReports, listFormats, outPathFor } = require('../src/report');
 
 let pass = 0;
 let fail = 0;
@@ -226,6 +227,107 @@ function testPlatformGuard() {
   );
 }
 
+// ── 9. 报告模板：html / md / json + 自定义模板 ──
+function testReportTemplates() {
+  // eslint-disable-next-line no-console
+  console.log('[report] 多格式模板');
+  const data = {
+    selfWxid: 'me',
+    contacts: { wxid_abc: '张三' },
+    chats: [
+      {
+        username: 'wxid_abc',
+        table: 'Msg_x',
+        messages: [
+          {
+            local_id: 1,
+            sender: 'wxid_abc',
+            is_self: false,
+            local_type: 1,
+            create_time: 1700000000,
+            create_time_iso: '2023-11-14T22:13:20.000Z',
+            content: '你好|世界\n第二行'
+          },
+          {
+            local_id: 2,
+            sender: 'me',
+            is_self: true,
+            local_type: 1,
+            create_time: 1700000100,
+            content: '& <b>加粗</b>'
+          }
+        ]
+      }
+    ]
+  };
+
+  assert(
+    listFormats().map((f) => f.id).join(',') === 'html,md,json',
+    '内置模板注册：html / md / json'
+  );
+
+  const html = buildReport(data, 'html');
+  assert(html.includes('张三') && html.includes('&amp; &lt;b&gt;'), 'html 模板：昵称映射 + HTML 转义');
+  assert(buildReport(data) === html, 'buildReport 缺省格式仍为 html（向后兼容）');
+
+  const md = buildReport(data, 'md');
+  assert(/^# /m.test(md) && md.includes('| 时间 | 发送者 | 内容 |'), 'md 模板：标题 + 表头');
+  assert(md.includes('你好\\|世界') && md.includes('<br>'), 'md 模板：竖线与换行已转义（表格不被撑坏）');
+
+  const parsed = JSON.parse(buildReport(data, 'json'));
+  assert(parsed.meta.messageCount === 2, 'json 模板：meta.messageCount 正确');
+  assert(parsed.chats[0].messages[0].sender_name === '张三', 'json 模板：补出 sender_name 昵称');
+  assert(parsed.chats[0].messages[1].create_time_iso, 'json 模板：补出缺失的 create_time_iso');
+  assert(!buildReport(data, 'json', { compact: true }).includes('\n'), 'json 模板：--compact 压成单行');
+
+  assert(
+    outPathFor('report.html', 'md') === 'report.md' && outPathFor('out.txt', 'json') === 'out.txt.json',
+    'outPathFor：按格式改写扩展名'
+  );
+
+  const tpl = path.join(os.tmpdir(), 'wcdb_tpl_' + Date.now() + '.js');
+  fs.writeFileSync(
+    tpl,
+    'module.exports = (d, ctx) => "N=" + d.chats[0].messages.length + "|" + ctx.escapeHtml("<a>");',
+    'utf8'
+  );
+  assert(buildReport(data, 'html', { template: tpl }) === 'N=2|&lt;a&gt;', '自定义模板模块可渲染并可复用 helpers');
+  fs.unlinkSync(tpl);
+
+  let threw = false;
+  try {
+    buildReport(data, 'yaml');
+  } catch (e) {
+    threw = true;
+  }
+  assert(threw, '未知格式抛错（含可选格式提示）');
+}
+
+// ── 10. 一次同时产出多种格式（html + md + json）──
+function testWriteReports() {
+  // eslint-disable-next-line no-console
+  console.log('[report] 同时产出多格式');
+  const tmp = path.join(os.tmpdir(), 'wcdb_report_' + Date.now());
+  fs.mkdirSync(tmp, { recursive: true });
+  const base = path.join(tmp, 'report.html');
+  const data = {
+    selfWxid: 'me',
+    contacts: {},
+    chats: [{ username: 'wxid_abc', table: 'Msg_x', messages: [{ sender: 'wxid_abc', content: 'hi', create_time: 1700000000 }] }]
+  };
+  const reports = writeReports(base, data, ['html', 'md', 'json']);
+  assert(reports.length === 3, '一次写出 3 个文件（实际 ' + reports.length + '）');
+  assert(
+    reports.map((r) => path.basename(r.path)).join(',') === 'report.html,report.md,report.json',
+    '多格式路径按基准名 + 格式扩展名派生'
+  );
+  assert(
+    reports.every((r) => fs.existsSync(r.path) && fs.readFileSync(r.path, 'utf8').length > 0),
+    '三个文件均已落盘且非空'
+  );
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 (async function main() {
   testTableName();
   testKey();
@@ -235,6 +337,8 @@ function testPlatformGuard() {
   await testExtract();
   testPipeline();
   testPlatformGuard();
+  testReportTemplates();
+  testWriteReports();
   // eslint-disable-next-line no-console
   console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
   process.exit(fail ? 1 : 0);
