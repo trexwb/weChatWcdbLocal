@@ -143,6 +143,28 @@ node bin/wcdb.js decrypt --dir D:\xwechat_files\<wxid>\db_storage --keys keys.js
 - 媒体原文件（图片/视频/语音的 `.dat`）仍是密文，不在本工具范围。
 - Windows 实时扫描与 macOS frida 均触碰系统安全机制，需相应权限。
 
+## 作为 WorkBuddy 技能安装（GitHub）
+
+本仓库本身即一个 WorkBuddy 技能（`SKILL.md` 在根目录）。推送到 GitHub 后，可直接作为技能安装：
+
+**方式 A：WorkBuddy 内置「从 URL 安装技能」**
+
+在 WorkBuddy 的技能中心 / 安装入口粘贴本仓库的 GitHub 地址，WorkBuddy 会识别根目录的 `SKILL.md` 完成安装。
+
+**方式 B：手动放置（等价）**
+
+```bash
+# 用户级（对所有项目可用）
+git clone <本仓库地址> ~/.workbuddy/skills/wechat-wcdb-local
+# 或项目级（仅当前仓库协作成员可用）
+git clone <本仓库地址> .workbuddy/skills/wechat-wcdb-local
+cd ~/.workbuddy/skills/wechat-wcdb-local && npm install
+```
+
+安装后在对话中提及「解密微信数据库 / 提取微信聊天记录」等意图，技能即被触发。技能附带的 Node 工具需先 `npm install`（解密为纯 JS 实现，无需原生编译）。
+
+> 技能目录名建议与 `SKILL.md` 中 `name: wechat-wcdb-local` 保持一致，便于管理。
+
 ## License
 
 MIT（个人在自有数据上使用）。
