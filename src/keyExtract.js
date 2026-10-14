@@ -119,17 +119,18 @@ function scanProcessMemoryWindows(pid) {
   // eslint-disable-next-line global-require
   const koffi = require('koffi');
   const Kernel32 = koffi.load('Kernel32.dll');
+  // 64 位 Windows（Win10+）MEMORY_BASIC_INFORMATION，标准 ABI 8 字节对齐，总尺寸 48 字节。
+  // 不手写填充：koffi 会按字段自然对齐自动补 padding（PartitionId 后补 2 字节使 RegionSize 8 对齐，
+  // 结构体末尾补 4 字节对齐到 48）。该路径依赖真实微信进程，未经真机验证，需在本机确认。
   const MBI = koffi.struct('MEMORY_BASIC_INFORMATION', {
     BaseAddress: 'void*',
     AllocationBase: 'void*',
     AllocationProtect: 'uint32_t',
     PartitionId: 'uint16_t',
-    _pad1: 'uint8_t[6]',
     RegionSize: 'uint64_t',
     State: 'uint32_t',
     Protect: 'uint32_t',
-    Type: 'uint32_t',
-    _pad2: 'uint8_t[4]'
+    Type: 'uint32_t'
   });
   const OpenProcess = Kernel32.func('void* OpenProcess(uint32_t, bool, uint32_t)');
   const VirtualQueryEx = Kernel32.func('uint64_t VirtualQueryEx(void*, const void*, MEMORY_BASIC_INFORMATION*, uint64_t)');
