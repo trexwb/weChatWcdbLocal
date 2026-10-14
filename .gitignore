@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Skill / tool runtime outputs
+plain/
+keys.json
+*.plain.db
+messages.json
+report.html
+/tmp/wxdb/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.log

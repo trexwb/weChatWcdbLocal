@@ -1,0 +1,35 @@
+{
+  "name": "wechat-wcdb-node",
+  "version": "0.1.0",
+  "description": "微信桌面版 4.x (WCDB) 本地数据库离线解密与消息提取 —— Node.js 跨平台（Windows / macOS）实现",
+  "bin": {
+    "wcdb": "bin/wcdb.js"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node bin/wcdb.js",
+    "test": "node test/selftest.js"
+  },
+  "keywords": [
+    "wechat",
+    "wcdb",
+    "sqlcipher",
+    "decrypt",
+    "forensics",
+    "macos",
+    "windows"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@foxglove/wasm-zstd": "^1.0.1",
+    "better-sqlite3": "^13.0.3",
+    "commander": "^15.0.0",
+    "koffi": "^3.3.3"
+  },
+  "optionalDependencies": {
+    "sqlcipher": "^5.1.1"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
